@@ -220,11 +220,6 @@ protected
   function serializeXML(nodeSelf: boolean; insertLineBreaks: boolean): string;
   function serializeHTML(nodeSelf: boolean; insertLineBreaks: boolean): string;
   procedure assignNoAttributes(source: TTreeNode); virtual;
-
-  procedure removeAndFreeNext(); //**< removes the next element (the one following self). (ATTENTION: looks like there is a memory leak for opened elements)
-  procedure removeElementKeepChildren; //**< removes/frees the current element, but keeps the children (i.e. removes self and possible self.reverse. Will not remove the opening tag, if called on a closing tag)
-
-
 public
   function toString(): string; reintroduce; //**< converts the element to a string (not recursive)
   function toString(includeText: boolean; includeAttributes: array of string): string; reintroduce; //**< converts the element to a string (not recursive)
@@ -236,6 +231,9 @@ public
 
   function caseInsensitiveCompare(const a,b: string): boolean; //**< returns true if a=b case insensitive. Can be passed to getAttribute
   function caseSensitiveCompare(const a,b: string): boolean;   //**< returns true if a=b case sensitive. Can be passed to getAttribute
+
+  procedure removeAndFreeNext(); //**< removes the next element (the one following self). (ATTENTION: looks like there is a memory leak for opened elements)
+  procedure removeElementKeepChildren; //**< removes/frees the current element, but keeps the children (i.e. removes self and possible self.reverse. Will not remove the opening tag, if called on a closing tag)
 
   class function compareInDocumentOrder(const a,b: TTreeNode): integer; static;
 end;
