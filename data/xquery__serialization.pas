@@ -92,9 +92,12 @@ TXQSerializationParams = record
   function getContentType: string;
 end;
 
-const XMLNamespaceUrl_XHTML = 'http://www.w3.org/1999/xhtml';
-      XMLNamespaceURL_MathML = 'http://www.w3.org/1998/Math/MathML';
-      XMLNamespaceUrl_SVG = 'http://www.w3.org/2000/svg';
+{$IFDEF USE_NAMESPACEURL}
+const 
+  XMLNamespaceUrl_XHTML = 'http://www.w3.org/1999/xhtml';
+  XMLNamespaceURL_MathML = 'http://www.w3.org/1998/Math/MathML';
+  XMLNamespaceUrl_SVG = 'http://www.w3.org/2000/svg';
+{$ENDIF}
 
 procedure serializeJSON(var serializer: TXQSerializer; const v: IXQValue; const params: TXQSerializationParams);
 procedure serializeAdaptive(var serializer: TXQSerializer; const v: IXQValue; const params: TXQSerializationParams);
@@ -253,10 +256,12 @@ procedure TXQHashsetQName.addHTMLLowercaseQNames(html5: boolean);
 
 var v: TXQHashsetQName.TKeyValuePairOption;
 begin
+{$IFDEF USE_NAMESPACEURL}
   if html5 then begin
     transformFromTo(getOrDefault(''), XMLNamespaceUrl_XHTML);
     transformFromTo(getOrDefault(XMLNamespaceUrl_XHTML), '');
   end;
+{$ENDIF}
   for v in self do begin
     transformFromTo(v.value, v.key);
   end;
@@ -861,16 +866,24 @@ var known: TNamespaceList;
   begin
     //since in HTML5 empty and xhtml namespace are the same; older versions treat them separately
     result := (   (isHTML5 or html) and ( (n.namespace = nil) or (n.namespace.getURL = '') ) )
+{$IFDEF USE_NAMESPACEURL}
              or ( (isHTML5 or xhtml) and ( n.namespace.getURL = XMLNamespaceUrl_XHTML) )
+{$ENDIF}
   end;
 
   function elementIsPhrasing(n: TTreeNode): boolean;
   begin
     if elementIsHTML(n) then result := htmlElementIsPhrasing(n)
-    else case n.getNamespaceURL() of
-      XMLNamespaceURL_MathML, XMLNamespaceUrl_SVG: result := true
-      else result := false
-    end;
+    else 
+{$IFDEF USE_NAMESPACEURL}
+      case n.getNamespaceURL() of
+        XMLNamespaceURL_MathML, XMLNamespaceUrl_SVG: result := true
+        else 
+{$ENDIF}
+          result := false
+{$IFDEF USE_NAMESPACEURL}
+      end;
+{$ENDIF}
   end;
 
   function elementDescendantsMightBeIndented(n: TTreeNode; isHTMLElement: boolean): boolean;
@@ -902,6 +915,7 @@ var known: TNamespaceList;
   var a: TTreeAttribute;
   begin
     if ns.prefix = '' then exit;
+{$IFDEF USE_NAMESPACEURL}
     case ns.url of
       XMLNamespaceUrl_XHTML, XMLNamespaceUrl_SVG, XMLNamespaceURL_MathML: begin
         for a in n.getEnumeratorAttributes do if a.namespace = ns then exit;
@@ -909,6 +923,7 @@ var known: TNamespaceList;
         deadPrefixes.add(ns);
       end;
     end;
+{$ENDIF}
   end;
 
   procedure appendContentTypeNow;
@@ -1169,7 +1184,7 @@ begin
   case params.jsonNodeOutputMethod of
     'xml': serializer.nodeFormat := tnsXML;
     'xhtml': serializer.nodeFormat := tnsXML;
-    'html': serializer.nodeFormat := tnsHTML;
+    'html': serializer.nodeFormat := tnsOuterHTML;
     'text': serializer.nodeFormat := tnsText;
     else serializer.error('SEPM0016', v.toValue);
   end;
@@ -1329,7 +1344,9 @@ begin
         if (htmlVersion = isAbsentMarker) then htmlVersion := '5.0';
         if (method = xqsmHTML) and assigned(cdataSectionElements) then begin
           cdataSectionElements.exclude('');
+{$IFDEF USE_NAMESPACEURL}
           if isHTML5 then cdataSectionElements.exclude(XMLNamespaceUrl_XHTML);
+{$ENDIF}
         end;
         if assigned(suppressIndentation) then suppressIndentation.addHTMLLowercaseQNames(isHTML5);
       end;

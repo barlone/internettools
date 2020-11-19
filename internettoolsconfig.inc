@@ -4,7 +4,7 @@
 //{$DEFINE USE_FLRE}                   //Bero's "Fast Light Regular Expressions" library. It is required for proper UTF-8 support in regex
 //{$DEFINE USE_FLRE_WITH_CACHE}          //As above, but parse every regex only once
 {$endif}
-
+//{$DEFINE USE_NAMESPACEURL}
 
 
 

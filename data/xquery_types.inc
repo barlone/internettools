@@ -2417,9 +2417,14 @@ begin
                     end
       else
         case serializer.nodeFormat of
-          tnsText: serializer.appendJSONString(toString);
-          tnsXML: serializer.appendJSONString(node.outerXML());
-          tnsHTML: serializer.appendJSONString(node.outerHTML());
+          tnsText: 
+            serializer.appendJSONString(toString);
+          tnsXML: 
+            serializer.appendJSONString(node.outerXML());
+          tnsOuterHTML: 
+            serializer.appendJSONString(node.outerHTML());
+          tnsInnerHTML: 
+            serializer.appendJSONString(node.innerHTML());
         end;
     end;
   end else serializer.append('null');
@@ -2429,9 +2434,14 @@ procedure TXQValueNode.xmlSerialize(var serializer: TXQSerializer);
 begin
   if node <> nil then begin
     case serializer.nodeFormat of
-      tnsText: serializer.appendXMLText(toString);
-      tnsXML: serializer.appendXMLText(node.outerXML()); //is this supposed to be like this?
-      tnsHTML: serializer.appendXMLText(node.outerHTML());
+      tnsText: 
+        serializer.appendXMLText(toString);
+      tnsXML: 
+        serializer.appendXMLText(node.outerXML()); //is this supposed to be like this?
+      tnsOuterHTML: 
+        serializer.appendXMLText(node.outerHTML());
+      tnsInnerHTML: 
+        serializer.appendXMLText(node.innerHTML());
     end;
   end
 end;

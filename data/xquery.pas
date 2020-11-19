@@ -153,7 +153,7 @@ type
   //** xqpdnAllowFullDotNotation: allow the dot operator everywhere. Even in $obj.property  @br
   TXQPropertyDotNotation = (xqpdnDisallowDotNotation, xqpdnAllowUnambiguousDotNotation, xqpdnAllowFullDotNotation);
 
-  TTreeNodeSerialization = (tnsText, tnsXML, tnsHTML);
+  TTreeNodeSerialization = (tnsText, tnsXML, tnsOuterHTML, tnsInnerHTML);
 
   TXQParsingModel = (xqpmXPath2, xqpmXQuery1, xqpmXPath3_0, xqpmXQuery3_0, xqpmXPath3_1, xqpmXQuery3_1);
   TXQParsingModels = set of TXQParsingModel;
