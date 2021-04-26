@@ -40,7 +40,7 @@ procedure finalizeFunctions;
 implementation
 
 uses xquery, xquery.internals.protectionbreakers, xquery.internals.common, xquery.internals.floathelpers, xquery.internals.collations, xquery.namespaces, bigdecimalmath, math,
-  simplehtmltreeparser, simplehtmlparser,
+  simplehtmltreeparser, simplehtmlparser, htmlInformation,
   bbutils, internetaccess, strutils, base64, xquery__regex, bbutilsbeta, xquery.internals.rng, xquery__serialization,
 
   {$IFDEF USE_BBFLRE_UNICODE}PUCU,bbnormalizeunicode{$ENDIF} //get FLRE from https://github.com/BeRo1985/flre or https://github.com/benibela/flre/
@@ -102,6 +102,30 @@ const NonNumericKind = [pvkUndefined, pvkBoolean, pvkQName, pvkObject, pvkArray,
 
 //================================Operators=====================================
 
+function arrayAsList(const a: IXQValue): TXQVList;
+begin
+  result := (a as TXQValueJSONArray).seq;
+end;
+
+function arrayHeadOrEmpty(const a: IXQValue): IXQValue;
+var
+  l: TXQVList;
+begin
+  l := arrayAsList(a);
+  if l.Count = 0 then result := xqvalue
+  else result := l[0];
+end;
+
+function binaryOperatorOnUnwrappedArrays(op: TXQBinaryOp; const cxt: TXQEvaluationContext; const aa, ab: IXQValue): IXQValue;
+var
+  a, b: IXQValue;
+begin
+  if aa.kind = pvkArray then a := arrayHeadOrEmpty(aa)
+  else a := aa;
+  if ab.kind = pvkArray then b := arrayHeadOrEmpty(ab)
+  else b := ab;
+  result := op(cxt, a, b);
+end;
 
 function xqvalueUnaryMinus(const cxt: TXQEvaluationContext; const nothing, arg: IXQValue): IXQValue;
 var
@@ -123,6 +147,7 @@ begin
     pvkFloat: result := TXQValueFloat.create((arg.typeAnnotation as TXSSimpleType).primitive, - arg.toFloat);
     pvkUndefined: result := xqvalue();
     pvkSequence: result := xqvalueUnaryMinus(cxt, nothing, arg.get(1));
+    pvkArray: result := xqvalueUnaryMinus(cxt, nothing, arrayHeadOrEmpty(arg));
     else result := TXQValueFloat.create(- arg.toFloat);
   end;
 end;
@@ -136,6 +161,7 @@ begin
     pvkFloat: result := TXQValueFloat.create(arg.typeAnnotation, arg.toFloat);
     pvkUndefined: result := xqvalue();
     pvkSequence: result := xqvalueUnaryPlus(cxt, nothing, arg.get(1));
+    pvkArray: result := xqvalueUnaryPlus(cxt, nothing, arrayHeadOrEmpty(arg));
     else result := TXQValueFloat.create(arg.toFloat);
   end;
 end;
@@ -170,9 +196,13 @@ begin
   if (ak in [pvkInt64, pvkBigDecimal]) and (bk in [pvkInt64, pvkBigDecimal]) then
     exit(xqvalueAddDecimals(a,b));
 
-  if (ak = pvkNull) or (bk = pvkNull) then
-    raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
-  if (ak in NonNumericKind) or (bk in NonNumericKind) then exit(xqvalue());
+  if (ak in NonNumericKind) or (bk in NonNumericKind) then begin
+    if (ak = pvkArray) or (bk = pvkArray) then
+      exit(binaryOperatorOnUnwrappedArrays(@xquery__functions.xqvalueAdd, cxt, a, b));
+    if (ak = pvkNull) or (bk = pvkNull) then
+      raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
+    exit(xqvalue());
+  end;
 
   if (ak = pvkDateTime) or (bk = pvkDateTime) then begin
     if (ak <> pvkDateTime) or (bk <> pvkDateTime) or
@@ -251,9 +281,13 @@ begin
   if (ak in [pvkInt64, pvkBigDecimal]) and (bk in [pvkInt64, pvkBigDecimal]) then
     exit(xqvalueSubtractDecimals(a,b));
 
-  if (ak = pvkNull) or (bk = pvkNull) then
-    raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
-  if (ak in NonNumericKind) or (bk in NonNumericKind) then exit(xqvalue());
+  if (ak in NonNumericKind) or (bk in NonNumericKind) then begin
+    if (ak = pvkArray) or (bk = pvkArray) then
+      exit(binaryOperatorOnUnwrappedArrays(@xquery__functions.xqvalueSubtract, cxt, a, b));
+    if (ak = pvkNull) or (bk = pvkNull) then
+      raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
+    exit(xqvalue());
+  end;
 
   if (ak = pvkDateTime) or (bk = pvkDateTime) then begin
     if (ak <> pvkDateTime) or (bk <> pvkDateTime) then exit(xqvalue);
@@ -341,9 +375,13 @@ begin
   if (ak in [pvkInt64, pvkBigDecimal]) and (bk in [pvkInt64, pvkBigDecimal]) then
     exit(xqvalueMultiplyDecimals(a,b));
 
-  if (ak = pvkNull) or (bk = pvkNull) then
-    raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
-  if (ak in NonNumericKind) or (bk in NonNumericKind) then exit(xqvalue());
+  if (ak in NonNumericKind) or (bk in NonNumericKind) then begin
+    if (ak = pvkArray) or (bk = pvkArray) then
+      exit(binaryOperatorOnUnwrappedArrays(@xquery__functions.xqvalueMultiply, cxt, a, b));
+    if (ak = pvkNull) or (bk = pvkNull) then
+      raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
+    exit(xqvalue());
+  end;
 
   if (ak = pvkDateTime) or (bk = pvkDateTime) then begin
     if ((ak = pvkDateTime) and (bk = pvkDateTime)) then exit(xqvalue);
@@ -400,9 +438,13 @@ begin
     end else raiseDivisionBy0NotAllowed;
   end;
 
-  if (ak = pvkNull) or (bk = pvkNull) then
-    raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
-  if (ak in NonNumericKind) or (bk in NonNumericKind) then exit(xqvalue());
+  if (ak in NonNumericKind) or (bk in NonNumericKind) then begin
+    if (ak = pvkArray) or (bk = pvkArray) then
+      exit(binaryOperatorOnUnwrappedArrays(@xquery__functions.xqvalueDivide, cxt, a, b));
+    if (ak = pvkNull) or (bk = pvkNull) then
+      raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
+    exit(xqvalue());
+  end;
 
   if (ak = pvkDateTime) then begin
     if not (a.typeAnnotation as TXSDateTimeType).isDuration then exit(xqvalue);
@@ -476,9 +518,13 @@ begin
     exit(baseSchema.integer.createValue(i));
   end;
 
-  if (ak = pvkNull) or (bk = pvkNull) then
-    raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
-  if (ak in NonNumericKind) or (bk in NonNumericKind) then exit(xqvalue());
+  if (ak in NonNumericKind) or (bk in NonNumericKind) then begin
+    if (ak = pvkArray) or (bk = pvkArray) then
+      exit(binaryOperatorOnUnwrappedArrays(@xquery__functions.xqvalueDivideInt, cxt, a, b));
+    if (ak = pvkNull) or (bk = pvkNull) then
+      raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
+    exit(xqvalue());
+  end;
 
   if not (bk in [pvkInt64, pvkBigDecimal]) then begin
     bf := b.toFloat;
@@ -517,9 +563,13 @@ begin
     exit(xqvalueI(i, a, b));
   end;
 
-  if (ak = pvkNull) or (bk = pvkNull) then
-    raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
-  if (ak in NonNumericKind) or (bk in NonNumericKind) then exit(xqvalue());
+  if (ak in NonNumericKind) or (bk in NonNumericKind) then begin
+    if (ak = pvkArray) or (bk = pvkArray) then
+      exit(binaryOperatorOnUnwrappedArrays(@xquery__functions.xqvalueMod, cxt, a, b));
+    if (ak = pvkNull) or (bk = pvkNull) then
+      raise EXQEvaluationException.create('err:XPTY0004', 'json null is not allowed in arithmetic expressions');
+    exit(xqvalue());
+  end;
 
 
   if ak in [pvkInt64, pvkBigDecimal] then
@@ -675,7 +725,7 @@ end;
 
 function xqvalueToNormalizedNodeSeq(const v: IXQValue): TXQVList;
 var
- i: Integer;
+ i: SizeInt;
  x: PIXQValue;
 begin
   case v.kind of
@@ -720,7 +770,8 @@ end;
 function xqvalueIntersect(const cxt: TXQEvaluationContext; const ta, tb: IXQValue): IXQValue;
 var a,b: TXQVList;
     resseq: TXQValueSequence;
-    ia,ib,cmp: integer;
+    ia,ib: sizeint;
+    cmp: integer;
 begin
   ignore(cxt);
   if not (ta.kind in [pvkNode,pvkSequence,pvkUndefined]) or not (tb.kind in [pvkNode,pvkSequence,pvkUndefined]) then
@@ -758,8 +809,8 @@ end;
 
 function xqvalueExcept(const cxt: TXQEvaluationContext; const ta, tb: IXQValue): IXQValue;
 var a,b: TXQVList;
-    ia,ib,cmp: integer;
-    i: Integer;
+    ia,ib,i: SizeInt;
+    cmp: Integer;
     resseq: TXQValueSequence;
 begin
   ignore(cxt);
@@ -1088,8 +1139,8 @@ end;
 function xqFunctionString(const context: TXQEvaluationContext; argc: SizeInt; args: PIXQValue): IXQValue;
 begin
   if argc <> 1 then result := xqvalue(context.SeqValueAsString)
-  else begin
-    if args[0].kind = pvkFunction then begin raiseXQEvaluationError('FOTY0014', 'Cannot pass function item to fn:string', args[0]); result := nil; end
+  else case args[0].kind of
+    pvkFunction, pvkArray: begin raiseXQEvaluationError('FOTY0014', 'Cannot pass function item to fn:string', args[0]); result := nil; end;
     else result := xqvalue(args[0].toString);
   end;
 end;
@@ -1318,8 +1369,10 @@ THttpRequestParams = object //This could completely replace TMIMEMultipartData
   procedure addXQValue(const value: IXQValue; const staticContext: TXQStaticContext);
   procedure addMime(const mime: TMIMEMultipartData);
 
-  procedure mergeOverride(const requestOverride: THttpRequestParams);
-  procedure addFormAndMerge(form: TTreeNode; cmp: TStringComparisonFunc; const requestOverride: THttpRequestParams);
+  //returns true if a value has been overridden
+  function mergeOverride(const requestOverride: THttpRequestParams): boolean;
+  //returns true if a value has been overridden
+  function addFormAndMerge(form: TTreeNode; cmp: TStringComparisonFunc; const requestOverride: THttpRequestParams): boolean;
 
   function toUrlEncodedRequest: string;
   function toMimeRequest(const staticContext: TXQStaticContext; out header: string): string;
@@ -1405,7 +1458,7 @@ procedure THttpRequestParams.addUrlEncodedList(s: string);
 
 var
   split: TStringArray;
-  i: Integer;
+  i: SizeInt;
 begin
   if s = '' then exit;
   split := strSplit(s, '&');
@@ -1419,9 +1472,16 @@ procedure THttpRequestParams.addXQValue(const value: IXQValue; const staticConte
     param: PHttpRequestParam;
     value, filename, contenttype, headers, h: String;
     temp: TXQValue;
-    i: Integer;
+    i: SizeInt;
   begin
     if urlEncoded then n := formEncode(n, charset);
+
+    if v.hasProperty('x', @temp) and v.hasProperty('y', nil) then begin
+      addRawKey(n + '.x').value:=temp.toString;
+      addRawKey(n + '.y').value:=v.getProperty('y').toString;
+      exit;
+    end;
+
     param := addRawKey(n);
 
     headers := '';
@@ -1520,7 +1580,7 @@ begin
   end;
 end;
 
-procedure THttpRequestParams.mergeOverride(const requestOverride: THttpRequestParams);
+function THttpRequestParams.mergeOverride(const requestOverride: THttpRequestParams): boolean;
 var
   requestOverrideUsed: array of boolean = nil;
   requestOverrideNextKeyOccurrence: array of SizeInt = nil; //this is used to build a multimap
@@ -1576,6 +1636,7 @@ var
 var oldData: array of THttpRequestParam;
   oldSize, i, replaced: SizeInt;
 begin
+  result := false;
   if (requestOverride.urlencoded <> urlencoded) or
      (urlencoded and (requestOverride.charset <> charset)) then
     raise EHttpRequestParamsException.Create('Incompatible http params');
@@ -1587,10 +1648,11 @@ begin
   SetLength(data, oldSize + requestOverride.size);
   for i := 0 to oldSize - 1 do begin
     replaced := requestOverrideKeyIndex.get(oldData[i].key, -2);
-    //replaced = -2: not overriden; replaced = -1: to remove; >= 0: override
+    //replaced = -2: not overridden; replaced = -1: to remove; >= 0: override
     if replaced <> -1 then begin
       addRawParam(oldData[i]);
       if replaced > -1 then begin
+        result := true;
         requestOverrideKeyIndex.include(oldData[i].key, requestOverrideNextKeyOccurrence[replaced]);
         requestOverrideUsed[replaced] := true;
         if requestOverride.data[replaced].hasValue then data[size-1].value := requestOverride.data[replaced].value;
@@ -1605,7 +1667,8 @@ begin
   compress;
 end;
 
-procedure THttpRequestParams.addFormAndMerge(form: TTreeNode; cmp: TStringComparisonFunc; const requestOverride: THttpRequestParams);
+function THttpRequestParams.addFormAndMerge(form: TTreeNode; cmp: TStringComparisonFunc; const requestOverride: THttpRequestParams
+  ): boolean;
 var temp: TTreeNode;
   name, value: string;
 begin
@@ -1619,7 +1682,7 @@ begin
     end;
   end;
 
-  mergeOverride(requestOverride);
+  result := mergeOverride(requestOverride);
 end;
 
 function THttpRequestParams.toUrlEncodedRequest: string;
@@ -1673,9 +1736,32 @@ check for <form method=dialog>
 enctype=text/plain
 }
 function xqFunctionForm(const context: TXQEvaluationContext; argc: SizeInt; args: PIXQValue): IXQValue;
+var onlyFormsWithOverriddenValue: boolean = false;
+    procedure failedToFindForm();
+    begin
+      raise EXQEvaluationException.create('XPDY0002', 'Could not find a form element');
+    end;
+
+    function findForms(n: TTreeNode): IXQValue;
+    var
+      nodeseq: TXQValueSequence;
+      nlast: TTreeNode;
+    begin
+      nodeseq := TXQValueSequence.create();
+      result := nodeseq;
+      if n.typ in [tetOpen, tetDocument] then nlast := n.reverse
+      else nlast := n.next;
+      while (n <> nlast) and (n <> nil) do begin
+        if (n.typ = tetOpen) and (n.hash = HTMLNodeNameHashs.form) and striEqual(n.value, 'form') then nodeseq.add(xqvalue(n));
+        n := n.next;
+      end;
+      if nodeseq.seq.Count = 0 then failedToFindForm();
+      xqvalueSeqSqueeze(result);
+    end;
+
 var requestOverride: THttpRequestParams;
     cmp: TStringComparisonFunc;
-
+    lastFormHadOverriddenValue: boolean = false;
 
     function encodeForm(const form: TTreeNode): IXQValue;
     var
@@ -1697,7 +1783,7 @@ var requestOverride: THttpRequestParams;
       multipart := post and striEqual( form.getAttribute('enctype', cmp), ContentTypeMultipart);
       request.charset := getFormEncoding(form);
 
-      request.addFormAndMerge(form, cmp, requestOverride);
+      lastFormHadOverriddenValue := request.addFormAndMerge(form, cmp, requestOverride);
       request.done;
 
       actionURI := form.getAttribute('action', cmp);
@@ -1731,28 +1817,57 @@ var requestOverride: THttpRequestParams;
 
 var v: PIXQValue;
   resseq: TXQValueSequence;
+  form, overrideOptions, nresult: IXQValue;
 begin
-  requiredArgCount(argc, 1, 2);
+  requiredArgCount(argc, 0, 2);
+  case argc of
+    0: begin
+      form := findForms(context.contextNode(true));
+      overrideOptions := xqvalue;
+    end;
+    1: begin
+      overrideOptions := nil; //hide uninitialized warning
+      form := args[0];
+      if (form.kind = pvkSequence) and (form.count = 1) then form := args[0].get(1);
+      case form.kind of
+        pvkNode, pvkSequence, pvkUndefined: overrideOptions := xqvalue;
+        pvkObject, pvkString: begin
+          overrideOptions := form;
+          form := findForms(context.contextNode(true));
+          onlyFormsWithOverriddenValue := true;
+        end;
+        else raiseXPTY0004TypeError(form, 'form argument');
+      end;
+    end;
+    2: begin
+      form := args[0];
+      overrideOptions := args[1];
+    end;
+    else exit(nil);
+  end;
 
-  if args[0].getSequenceCount = 0 then
+  if form.getSequenceCount = 0 then
     exit(xqvalue);
 
   cmp := @context.staticContext.nodeCollation.equal;
   requestOverride.init;
-
-  if argc = 2 then
-    requestOverride.addXQValue(args[1], context.staticContext);
+  requestOverride.addXQValue(overrideOptions, context.staticContext);
 
   resseq := TXQValueSequence.create();
   result := resseq;
-  for v in args[0].GetEnumeratorPtrUnsafe do
-    resseq.add(encodeForm(v^.toNode));
+  for v in form.GetEnumeratorPtrUnsafe do begin
+    nresult := encodeForm(v^.toNode);
+    if lastFormHadOverriddenValue or not onlyFormsWithOverriddenValue then begin
+      resseq.add(nresult);
+    end;
+  end;
   xqvalueSeqSqueeze(result);
   requestOverride.done;
+  if onlyFormsWithOverriddenValue and (result.Count = 0) then failedToFindForm();
 end;
 
 function xqFunctionUri_combine(const context: TXQEvaluationContext; {%H-}argc: SizeInt; args: PIXQValue): IXQValue;
-var i: Integer;
+var i: SizeInt;
     encoding: TSystemCodePage;
     requests: array[0..1] of THttpRequestParams;
 begin
@@ -1918,7 +2033,7 @@ var paramobj: TXQValueStringMap;
   procedure parseParamsUriEncoded(const q: ixqvalue);
   var
     request: THttpRequestParams;
-    i: Integer;
+    i: SizeInt;
   begin
     if paramobj = nil then paramobj := TXQValueStringMap.create();
     request.init;
@@ -1929,7 +2044,7 @@ var paramobj: TXQValueStringMap;
   end;
   procedure parseParamsMime(const data, boundary: string);
   var mime: TMIMEMultipartData;
-    i: Integer;
+    i: SizeInt;
   begin
     if paramobj = nil then paramobj := TXQValueStringMap.create();
     mime.parse(data, boundary);
@@ -2259,7 +2374,7 @@ end;
 
 function xqFunctionSubstring({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var s:string;
-var from, len: integer;
+var from, len: sizeint;
 
 begin
   s:=args[0].toString;
@@ -2274,7 +2389,7 @@ end;
 function xqFunctionString_length(const context: TXQEvaluationContext; {%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
   temp: String;
-  len: LongInt;
+  len: SizeInt;
 begin
   if argc = 1 then temp := args[0].toString
   else temp := context.SeqValueAsString;
@@ -2448,7 +2563,7 @@ var
   list: String;
   split: string;
   splitted: TStringArray;
-  i: Integer;
+  i: sizeint;
 begin
   list := args[0].toString;
   searched := args[1].toString;
@@ -2469,7 +2584,8 @@ end;
 
 function xqFunctionTranslate({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
- i,j,cp: Integer;
+ i,j: sizeint;
+ cp: Integer;
  resstr: RawByteString;
  inIterator, mapIterator, transIterator: TStrIterator;
  found: Boolean;
@@ -2570,7 +2686,7 @@ var term: TXQuery;
 begin
   requiredArgCount(argc, 1, 2);
   //result := context.staticContext.sender.evaluateXPath2(args[0].toString);
-  if context.staticContext.sender = nil then raise EXQEvaluationException.create('pxp:NOENGINE', 'cannot call pxp:eval without a xquery engine (e.g. from an interpreted function in a native module)');
+  if context.staticContext.sender = nil then raise EXQEvaluationException.create('pxp:NOENGINE', 'cannot call pxp:eval without an xquery engine (e.g. from an interpreted function in a native module)');
   model := xqpmXPath2;
   if argc = 2 then begin
     if args[1].kind <> pvkObject then raiseXPTY0004TypeError(args[1], 'object');
@@ -2596,7 +2712,7 @@ end;
 function xqFunctionCSS(const context: TXQEvaluationContext; {%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 begin
   requiredArgCount(argc, 1);
-  if context.staticContext.sender = nil then raise EXQEvaluationException.create('pxp:NOENGINE', 'cannot call pxp:css without a xquery engine (e.g. from an interpreted function in a native module)');
+  if context.staticContext.sender = nil then raise EXQEvaluationException.create('pxp:NOENGINE', 'cannot call pxp:css without an xquery engine (e.g. from an interpreted function in a native module)');
   result := context.staticContext.sender.evaluateCSS3(args[0].toString, context.contextNode(false));
 end;
 
@@ -2657,7 +2773,7 @@ end;
 function xqFunctionObject(const context: TXQEvaluationContext; argc: SizeInt; args: PIXQValue): IXQValue;
 var
   seq: TXQVList;
-  i: Integer;
+  i: sizeint;
   obj: TXQValueStringMap;
   v: IXQValue;
 begin
@@ -2707,7 +2823,7 @@ begin
 end;
 function guessDateFormat(const d: string): string;
 var state: (gdfsFirstDigits, gdfsFirstSeparator, gdfsMiddleDigits, gdfsMiddleLetters, gdfsSecondSeparator);
-  i, start: Integer;
+  i, start: SizeInt;
   builder: TStrBuilder;
   direction: (gdfsYMD, gdfsDMY) = gdfsYMD;
 begin
@@ -3191,7 +3307,7 @@ begin
   {$ifndef ALLOW_EXTERNAL_DOC_DOWNLOAD}
   raise EXQEvaluationException.Create('pxp:CONFIG', 'Using fn:doc is not allowed');
   {$endif}
-  if context.staticContext.sender = nil then raise EXQEvaluationException.create('pxp:NOENGINE', 'cannot call pxp:doc without a xquery engine (e.g. from an interpreted function in a native module)');
+  if context.staticContext.sender = nil then raise EXQEvaluationException.create('pxp:NOENGINE', 'cannot call pxp:doc without an xquery engine (e.g. from an interpreted function in a native module)');
 
   //if not TXQValue_anyURI.canCreateFromstring(url) then raise EXQEvaluationException.Create('FODC0005', 'Invalid url: '+url);
 
@@ -3252,7 +3368,7 @@ end;
 
 function xqFunctionConcatenate({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
- i: Integer;
+ i: SizeInt;
  resseq: TXQValueSequence;
 begin
   resseq := TXQValueSequence.create(argc);
@@ -3270,7 +3386,7 @@ var
       result :=comparableTypes(a.toValue, b.toValue) and equalAtomic(a, b, collationOverride);
   end;
 
-var  i: Integer;
+var  i: sizeint;
      v: TXQValue;
      resseq: TXQValueSequence;
 begin
@@ -3305,7 +3421,7 @@ end;
 
 function xqFunctionDistinct_values(const context: TXQEvaluationContext; {%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
- i: Integer;
+ i: sizeint;
  v: TXQValue;
  resseq: TXQValueSequence;
  collation: TXQCollation;
@@ -3333,7 +3449,7 @@ end;
 
 function xqFunctionInsert_before({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
- index: Integer;
+ index: SizeInt;
  a: PIXQValue;
  resseq: TXQValueSequence;
 begin
@@ -3355,7 +3471,7 @@ end;
 
 function xqFunctionRemove({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
- i, count: Integer;
+ i, count: SizeInt;
  iterator: TXQValueEnumeratorPtrUnsafe;
  list: TXQVList;
 begin
@@ -3390,7 +3506,7 @@ begin
 end;
 
 function xqFunctionsubsequence({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
-var from,len,oldlen: Integer;
+var from,len,oldlen: SizeInt;
  resseq: TXQValueSequence;
  resseqseq: TXQVList;
  iterator: TXQValueEnumeratorPtrUnsafe;
@@ -3681,7 +3797,7 @@ end;
 var tempf: xqfloat;
     tempf2: xqfloat;
     tempd: BigDecimal;
- i: Integer;
+ i: SizeInt;
  seq: IXQValue;
  enumerable: TXQValueEnumeratorPtrUnsafe;
  pv: PIXQValue;
@@ -4170,9 +4286,9 @@ end;
 
 function xqFunctionTail({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
-  len: Integer;
+  len: SizeInt;
   seq: TXQValueSequence;
-  i: Integer;
+  i: SizeInt;
 begin
   len := args[0].getSequenceCount;
   if len < 2 then exit(xqvalue);
@@ -4194,7 +4310,7 @@ end;
 
 function xqFunctionPath(const context: TXQEvaluationContext; {%H-}argc: SizeInt; args: PIXQValue): IXQValue;
   function path(n: TTreeNode): string;
-    function getPosition(checkValue: boolean): integer;
+    function getPosition(checkValue: boolean): SizeInt;
     var cur: TTreeNode;
     begin
       result := 1;
@@ -4315,8 +4431,7 @@ end;
 
 function xqFunctionFold(const context: TXQEvaluationContext; left: boolean; args: PIXQValue): IXQValue;
 var
-  count: Integer;
-  i: Integer;
+  i, count: SizeInt;
   seq: IXQValue;
   f: TXQBatchFunctionCall;
 begin
@@ -4357,9 +4472,8 @@ var
   seq1: TXQValue;
   seq2: TXQValue;
   func: TXQValueFunction;
-  count: Integer;
   resseq: TXQValueSequence;
-  i, stacksize: Integer;
+  i, stacksize, count: SizeInt;
   stack: TXQEvaluationStack;
 begin
   seq1 := args[0].toValue;
@@ -4643,8 +4757,8 @@ end;
 function TXQTermRNG.evaluate(var context: TXQEvaluationContext): IXQValue;
   function permute(const v: IXQValue): TXQValue;
   var
-    n, i: Integer;
-    pos: array of integer = nil;
+    n, i: SizeInt;
+    pos: array of SizeInt = nil;
     resseq: TXQValueSequence;
   begin
     n := v.getSequenceCount;
@@ -5103,10 +5217,10 @@ var shortLang: String;
 
 
 var
-  separator: LongInt;
+  separator: SizeInt;
   i: Integer;
   formatted: String;
-  j: LongInt;
+  j: SizeInt;
   signed: Boolean;
   lang: String;
   procedure raiseInvalidPicture();
@@ -5311,7 +5425,7 @@ var
   allDigits: Boolean;
   tz, tempcount: Integer;
   fallbackOccured: String = '';
-  tempcountopt: LongInt;
+  tempcountopt: SizeInt;
   tempxqv: array of IXQValue;
 begin
   if argc = 5 then begin
@@ -5683,7 +5797,7 @@ var
     scalingFactor: integer;// = integerMandatory
   end;
   arabic: String;
-  dot: LongInt;
+  dot: SizeInt;
   integerActual: Integer;
   fractionActual: Integer;
   resstr: String;
@@ -5968,7 +6082,7 @@ function xqFunctionApply(const context: TXQEvaluationContext; {%H-}argc: SizeInt
 var
   pv: PIXQValue;
   stack: TXQEvaluationStack;
-  stacksize: Integer;
+  stacksize: SizeInt;
   f: TXQValueFunction;
 begin
   case args[0].kind of
@@ -6001,7 +6115,7 @@ var
   input, token: string;
   splitted: TStringArray;
   v: TXQValue;
-  i: Integer;
+  i: SizeInt;
 begin
   if argc = 3 then collation := TXQueryEngine.getCollation(args[2].toString, context.staticContext.baseURI)
   else collation := context.staticContext.collation;
@@ -6050,9 +6164,9 @@ var p: pchar;
   end;
 
 
-  function getStringFromArray(a: PString; ahigh: integer; required: boolean = true): integer;
+  function getStringFromArray(a: PString; ahigh: SizeInt; required: boolean = true): SizeInt;
   var
-    i: Integer;
+    i: SizeInt;
     q: pchar;
   begin
     skipWhitespace;
@@ -6277,13 +6391,13 @@ var sortingContext: PSortingContext absolute self;
 
   begin
     if v1.kind = pvkNode then begin
-      if (v2.kind = pvkNode) or (TXQValueOwnershipTracker.isStringKeyLike(v2)) then
+      if (v2.kind = pvkNode) or (TXQValueOwnershipTracker.isKeyStringLike(v2)) then
         exit(compareStrings)
        else
         error;
     end;
     if v2.kind = pvkNode then begin
-      if TXQValueOwnershipTracker.isStringKeyLike(v1) then
+      if TXQValueOwnershipTracker.isKeyStringLike(v1) then
         exit(compareStrings)
        else
         error;
@@ -6338,7 +6452,7 @@ var
   sortContext: TSortingContext;
   keyfunc: TXQValueFunction;
   tempArray: array of TXPair = nil;
-  count, i, stacksize: Integer;
+  count, i, stacksize: SizeInt;
   stack: TXQEvaluationStack;
   w: TXQValue;
 begin
@@ -6621,10 +6735,6 @@ end;
 
 
 
-function arrayAsList(const a: IXQValue): TXQVList;
-begin
-  result := (a as TXQValueJSONArray).seq;
-end;
 
 procedure raiseInvalidArrayOutOfBounds(const a: IXQValue; index: Int64);
 begin
@@ -6685,6 +6795,7 @@ begin
     if len < 0 then raise EXQEvaluationException.create('FOAY0002', 'Negative length', nil, argv^);
   end else begin
     len := a.Size - p;
+    if len < 0 then len := 0;
   end;
   if (p < 0) or (p + len >= a.Size + 1) then raiseInvalidArrayOutOfBounds(argv^, p);
   iter := a.GetEnumeratorMembersPtrUnsafe;
@@ -6852,11 +6963,10 @@ function xqFunctionArrayFold_right(const context: TXQEvaluationContext; {%H-}arg
 var
   f: TXQBatchFunctionCall;
   list: TXQVList;
-  i: Integer;
+  i: SizeInt;
 begin
   list := arrayAsList(argv^);
-  f.init(context, argv[2]);
-  f.stack.topptr(0)^ := argv[1];
+  f.init(context, argv[2], argv[1]);
   for i := list.count -1 downto 0 do with f do begin
     stack.topptr(1)^ := list[i];
     stack.topptr(0)^ := call();
@@ -6868,7 +6978,7 @@ end;
 function xqFunctionArrayFor_each_pair(const context: TXQEvaluationContext; {%H-}argc: SizeInt; argv: PIXQValue): IXQValue;
 var
   list: TXQVList;
-  i: Integer;
+  i: SizeInt;
   a, b: TXQValueJSONArray;
   count: Int64;
   f: TXQBatchFunctionCall;
@@ -7043,17 +7153,17 @@ begin
         case pv^.getPropertyKeyKind of
           xqmpkkStandardKeys: begin
             for mp in pv^.getEnumeratorPropertiesUnsafe do begin
-              if TXQValueOwnershipTracker.equal(mp.key, key) then outseq.addInArray(mp.Value)
-              else mapFind(outseq, key, mp.Value);
+              if TXQValueOwnershipTracker.equal(mp.key, key) then outseq.addInArray(mp.Value);
+              mapFind(outseq, key, mp.Value);
             end;
           end;
           xqmpkkStringKeys: begin
-            isStringKey := TXQValueOwnershipTracker.isStringKeyLike(key.toValue);
+            isStringKey := TXQValueOwnershipTracker.isStringLikeAfterAtomize(key.toValue);
             if isStringKey then
               skey := key.toString;
             for smp in pv^.getEnumeratorStringPropertiesUnsafe do begin
-              if isStringKey and ( smp.key = skey) then outseq.addInArray(smp.Value)
-              else mapFind(outseq, key, smp.Value);
+              if isStringKey and ( smp.key = skey) then outseq.addInArray(smp.Value);
+              mapFind(outseq, key, smp.Value);
             end;
           end;
         end;
@@ -7097,15 +7207,17 @@ function xqFunctionMapRemove({%H-}argc: SizeInt; argv: PIXQValue): IXQValue;
     stringkeys: array of string = nil;
     obj: TXQValueStringMap;
     pp: TXQProperty;
-    i: Integer;
+    i: SizeInt;
     v: TXQValue;
     keep: Boolean;
   begin
     SetLength(stringkeys, argv[1].getSequenceCount);
     i := 0;
     for v in argv[1].GetEnumeratorArrayTransparentUnsafe do begin
-      if TXQValueOwnershipTracker.isStringKeyLike(v) then
+      if TXQValueOwnershipTracker.isStringLikeAfterAtomize(v) then begin
+        if i >= high(stringkeys) then SetLength(stringkeys, 2*length(stringkeys));
         stringkeys[i] := v.toString;
+      end;
       inc(i);
     end;
     if i = 0 then
@@ -7127,7 +7239,7 @@ function xqFunctionMapRemove({%H-}argc: SizeInt; argv: PIXQValue): IXQValue;
     map: TXQValueStandardMap;
     keys: array of TXQValue = nil;
     mp: TXQStandardProperty;
-    i: Integer;
+    i: SizeInt;
     v: TXQValue;
     keep: Boolean;
   begin
@@ -7136,9 +7248,12 @@ function xqFunctionMapRemove({%H-}argc: SizeInt; argv: PIXQValue): IXQValue;
       exit(argv[0]);
     i := 0;
     for v in argv[1].GetEnumeratorArrayTransparentUnsafe do begin
+      if i >= high(keys) then SetLength(keys, 2*length(keys));
       keys[i] := v;
       inc(i);
     end;
+    if i < length(keys) then
+      SetLength(keys, i);
     map := TXQValueStandardMap.create();
     for mp in argv[0].getEnumeratorPropertiesUnsafe do begin
       keep := true;
@@ -7161,12 +7276,14 @@ function xqFunctionMapFor_Each(const context: TXQEvaluationContext; {%H-}argc: S
 var f: TXQBatchFunctionCall;
     l: TXQVList;
     pp: TXQStandardProperty;
+    map: TXQValue;
 begin
   l := TXQVList.create(argv[0].Size);
   result := TXQValueSequence.create(l);
+  map := argv[0].toValue;
   with f do begin
     init(context, argv[1]);
-    for pp in argv[0].getEnumeratorPropertiesUnsafe do begin
+    for pp in map.getEnumeratorPropertiesUnsafe do begin
       l.add(call2(pp.key, pp.Value));
     end;
     done;
@@ -7194,6 +7311,8 @@ begin
 
   parser.init;
   parser.context := @context;
+  if (argc = 2) then
+    parser.setConfigFromMap(args[1]);
   result := parser.parse(data);
 end;
 
@@ -7392,7 +7511,7 @@ begin
   pxpold.registerFunction('inner-html',0,1,@xqFunctionInner_HTML, []);
   pxpold.registerFunction('inner-text',0,1,@xqFunctionInner_Text, []);
   pxpold.registerFunction('matched-text',0,0,@xqFunctionMatched_Text, []);
-  pxpold.registerFunction('form',1,2,@xqFunctionForm, []);
+  pxpold.registerFunction('form',0,2,@xqFunctionForm, []);
   pxpold.registerFunction('resolve-html',0,2,@xqFunctionResolve_Html, []);
   resolveHTMLCallback := @xqFunctionResolve_Html;
   pxpold.registerFunction('random',0,1,@xqFunctionRandom, []);
@@ -7434,6 +7553,11 @@ transform
   '             ) else . )');
   pxpold.registerInterpretedFunction('transform', '($root as item()*, $f as function(*)) as item()*', 'pxp:transform($root, $f, {})');
   pxpold.registerInterpretedFunction('transform', '($f as function(*)) as item()*', 'pxp:transform(., $f, {})');
+
+  x.registerInterpretedFunction('replace-nodes', '($root as item()*, $nodes as item()*, $replacement as item()*) as item()*', 'pxp:transform($root, function($i) {' +
+    ' if ($nodes[. is $i]) then if ($replacement instance of function(*)) then $replacement($i) else $replacement else $i'+
+  '})');
+  x.registerInterpretedFunction('replace-nodes', '($nodes as item()*, $replacement as item()*) as item()*', 'x:replace-nodes(($nodes!root())|(), $nodes, $replacement)');
 
   pxp.registerFunction('serialize-json', @xqFunctionSerialize_Json, [xqcdContextOther]).setVersionsShared([itemStar, stringt],  [itemStar, itemOrEmpty, stringt]);
 
@@ -7624,7 +7748,7 @@ transform
   fn3.registerFunction('available-environment-variables', @xqFunctionAvailable_Environment_Variables).setVersionsShared([stringStar]);
 
   fn3.registerFunction('parse-xml', @xqFunctionParse_XML, [xqcdFocusItem,xqcdContextOther]).setVersionsShared([stringOrEmpty, documentElementNodeOrEmpty]);
-  fn3.registerFunction('parse-xml-fragment', @xqFunctionParse_XML_Fragment, [xqcdFocusItem,xqcdContextOther]).setVersionsShared([stringOrEmpty, documentElementNodeOrEmpty]);
+  fn3.registerFunction('parse-xml-fragment', @xqFunctionParse_XML_Fragment, [xqcdFocusItem,xqcdContextOther]).setVersionsShared([stringOrEmpty, documentNodeOrEmpty]);
   {pxp3}pxpold.registerFunction('parse-html', @xqFunctionParse_HTML, [xqcdFocusItem,xqcdContextOther]).setVersionsShared([stringOrEmpty, documentElementNodeOrEmpty]);
   fn3.registerFunction('serialize', @xqFunctionSerialize, [xqcdContextOther]).setVersionsShared([itemStar, stringt],  [itemStar, elementSerializationParamsOrEmpty, stringt]);
   fn3_1.registerFunction('serialize', @xqFunctionSerialize, [xqcdContextOther]).setVersionsShared([itemStar, stringt],  [itemStar, itemOrEmpty, stringt]);
@@ -7639,7 +7763,7 @@ transform
 
 
   fn3.registerFunction('generate-id', @xqFunctionGenerateId, dependencyAll).setVersionsShared([stringt],  [nodeOrEmpty, stringt]);
-  fn3.registerFunction('random-number-generator', @xqFunctionRandom_Number_Generator, ['() as map(xs:string, item())', '($seed as xs:anyAtomicType?) as map(xs:string, item())'], [xqcdContextOther]);
+  fn3_1.registerFunction('random-number-generator', @xqFunctionRandom_Number_Generator, ['() as map(xs:string, item())', '($seed as xs:anyAtomicType?) as map(xs:string, item())'], [xqcdContextOther]);
 
   fn3_1.registerFunction('apply', @xqFunctionApply, dependencyNone).setVersionsShared([functiont, arrayt, itemStar]);
   fn3_1.registerFunction('contains-token', @xqFunctionContains_Token, [xqcdContextCollation]).setVersionsShared([stringStar, stringt, boolean],  [stringStar, stringt, stringt, boolean]);
@@ -7674,6 +7798,7 @@ transform
 
 
   fnarray := TXQNativeModule.Create(XMLnamespace_XPathFunctionsArray);
+  fnarray.acceptedModels := PARSING_MODEL3_1;
   TXQueryEngine.registerNativeModule(fnarray);
   fnarray.registerFunction('size', @xqFunctionArraySize).setVersionsShared([arrayt, integer]);
   fnarray.registerFunction('get', @xqFunctionArrayGet).setVersionsShared([arrayt, integer, itemStar]);
@@ -7699,6 +7824,7 @@ transform
   fnarray.registerFunction('flatten', @xqFunctionArrayFlatten).setVersionsShared([itemStar, itemStar]);
 
   fnmap := TXQNativeModule.Create(XMLnamespace_XPathFunctionsMap);
+  fnmap.acceptedModels := PARSING_MODEL3_1;
   TXQueryEngine.registerNativeModule(fnmap);
   fnmap.registerFunction('merge', @xqFunctionMapMerge).setVersionsShared([mapStar, map],  [mapStar, map, map]);
   fnmap.registerFunction('size', @xqFunctionMapSize).setVersionsShared([map, integer]);

@@ -355,7 +355,7 @@ procedure strSplit(out splitted: TStringArray;s: string; sep:string=',';includeE
 function strSplit(s:string;sep:string=',';includeEmpty:boolean=true):TStringArray;overload;
 
 function strWrapSplit(const Line: string; MaxCol: SizeInt = 80; const BreakChars: TCharSet = [' ', #9]): TStringArray;
-function strWrap(Line: string; MaxCol: Integer = 80; const BreakChars: TCharSet = [' ', #9]): string;
+function strWrap(Line: string; MaxCol: SizeInt = 80; const BreakChars: TCharSet = [' ', #9]): string;
 
 function strReverse(s: string): string; //**< reverses a string. Assumes the encoding is utf-8
 
@@ -374,7 +374,7 @@ function strAfterLast(const s: string; const sep: TCharSet): string; overload;
 //**Joins all string list items to a single string separated by @code(sep).@br
 //**If @code(limit) is set, the string is limited to @code(abs(limit)) items.
 //**if limit is positive, limitStr is appended; if limitStr is negative, limitStr is inserted in the middle
-function strJoin(const sl: TStrings; const sep: string = ', '; limit: Integer=0; const limitStr: string='...'): string;overload;
+function strJoin(const sl: TStrings; const sep: string = ', '; limit: integer=0; const limitStr: string='...'): string;overload;
 //**Joins all string list items to a single string separated by @code(sep).@br
 function strJoin(const sl: TStringArray; const sep: string = ', '; limit: SizeInt=0; const limitStr: string='...'): string;overload;//{$ifdef HASINLINE} inline; {$endif}
 function strJoin(strings: PString; stringsLength: SizeInt; const sep: string = ', '): string;overload;
@@ -422,6 +422,7 @@ procedure strAnsi2UnicodeMoveProc(source:pchar;cp : TSystemCodePage;var dest:uni
 {$IFDEF fpc}
 procedure registerFallbackUnicodeConversion; {$ifndef HAS_CPSTRING} deprecated 'Codepage aware extension requires fpc >=3';{$endif}
 function strEncodingFromName(str:string):TSystemCodePage; //**< Gets the encoding from an encoding name (e.g. from http-equiv)
+function strEncodingName(e: TSystemCodePage): string;
 //this can return CP_ACP (perhaps i will change that)
 function strActualEncoding(const str: RawByteString): TSystemCodePage; {$ifdef HASINLINE} inline; {$endif}
 function strActualEncoding(e: TSystemCodePage): TSystemCodePage; {$ifdef HASINLINE} inline; {$endif}
@@ -451,7 +452,7 @@ function strUpperCaseSpecialUTF8(codePoint: integer): string;
 function strLowerCaseSpecialUTF8(codePoint: integer): string;
 
 
-type TDecodeHTMLEntitiesFlags = set of (dhefStrict, dhefAttribute);
+type TDecodeHTMLEntitiesFlags = set of (dhefStrict, dhefAttribute, dhefWindows1252Extensions, dhefNormalizeLineEndings);
      EDecodeHTMLEntitiesException = class(Exception);
 //**This decodes all html entities to the given encoding. If strict is not set
 //**it will ignore wrong entities (so e.g. X&Y will remain X&Y and you can call the function
@@ -548,6 +549,7 @@ protected
   procedure appendCodePointToUtf8String(const codepoint: integer); inline;
   procedure appendCodePointWithEncodingConversion(const codepoint: integer);
   procedure appendRaw(const s: RawByteString); inline;
+  procedure reserveAdd1;
 public
   buffer: pstring;
   procedure init(abuffer:pstring; basecapacity: SizeInt = 64; aencoding: TSystemCodePage = {$ifdef HAS_CPSTRING}CP_ACP{$else}CP_UTF8{$endif});
@@ -585,6 +587,7 @@ end;
 
     function EncodeHex: String; inline;
     function DecodeHex: String; inline;
+    function DecodeHexToBytes: TBytes;
     function RemoveFromLeft(chopoff: SizeInt): String;
       {
       function AfterOrEmpty(const sep: String): String; inline;
@@ -1066,6 +1069,21 @@ begin
   result := strDecodeUTF8Character(temp, pend)
 end;
 
+procedure TUTF8StringCodePointBlockEnumerator.mark;
+begin
+  markedPos := p;
+end;
+
+procedure TUTF8StringCodePointBlockEnumerator.markNext;
+begin
+  markedPos := p + FCurrentByteLength;
+end;
+
+function TUTF8StringCodePointBlockEnumerator.markedByteLength: SizeInt;
+begin
+  result := p - markedPos;
+end;
+
 
 procedure TUTF8StringCodePointBlockEnumerator.init(const s: string);
 begin
@@ -1109,20 +1127,6 @@ begin
   result.FCurrentByteLength:=0;
 end;
 
-procedure TUTF8StringCodePointBlockEnumerator.mark;
-begin
-  markedPos := p;
-end;
-
-procedure TUTF8StringCodePointBlockEnumerator.markNext;
-begin
-  markedPos := p + FCurrentByteLength;
-end;
-
-function TUTF8StringCodePointBlockEnumerator.markedByteLength: SizeInt;
-begin
-  result := p - markedPos;
-end;
 
 
 procedure TStrBuilder.appendWithEncodingConversion(const s: RawByteString);
@@ -1156,15 +1160,16 @@ procedure TStrBuilder.init(abuffer: pstring; basecapacity: SizeInt; aencoding: T
 begin
   buffer := abuffer;
   if basecapacity <= 0 then basecapacity := 1;
-  SetLength(buffer^, basecapacity); //need to create a new string to prevent aliasing
-  //if length(buffer^) < basecapacity then
-  //else UniqueString(buffer^);    //or could uniquestring be enough?
+  if length(abuffer^) <> basecapacity then
+    SetLength(abuffer^, basecapacity)
+  else
+    UniqueString(abuffer^);  //need to create a new string to prevent aliasing
 
-  next := pchar(buffer^);
-  bufferend := next + length(buffer^);
+  next := pointer(abuffer^);
+  bufferend := next + basecapacity;
 
   //encoding := strActualEncoding(buffer^);
-  SetCodePage(RawByteString(buffer^), aencoding, false);
+  SetCodePage(RawByteString(abuffer^), aencoding, false);
   encoding := strActualEncoding(aencoding);
 end;
 
@@ -1195,21 +1200,56 @@ end;
 procedure TStrBuilder.reserveadd(delta: SizeInt);
 var
   oldlen: SizeInt;
+  newlen: SizeInt;
+  temp: pchar;
 begin
-  if next + delta > bufferend then begin
+  temp := next;
+  if temp + delta > bufferend then begin
     oldlen := count;
-    SetLength(buffer^, max(min(2*length(buffer^), oldlen + 32*1024*1024), oldlen + delta));
-    next := pchar(buffer^) + oldlen;
-    bufferend := pchar(buffer^) + length(buffer^);
+    newlen := max(min(2*length(buffer^), oldlen + 32*1024*1024), oldlen + delta);
+    SetLength(buffer^, newlen);
+    temp := pchar(buffer^);
+    next := temp + oldlen;
+    bufferend := temp + newlen;
   end;
 end;
-
 procedure TStrBuilder.append(c: char);
 begin
-  if next >= bufferend then reserveadd(1);
+  if next >= bufferend then reserveadd1;
   next^ := c;
   inc(next);
 end;
+(*
+slightly faster on linux amd64
+appending 100MB
+from 188 ms (with resize 210 ms)
+to 180ms    (with resize 203 ms)
+{$AsmMode intel}
+procedure TStrBuilder.append(c: char); assembler; register; nostackframe;
+//c in rsi (aka. esi/sil)
+//self in rdi
+label appendnow,resize;
+asm
+  mov rax, qword ptr [ rdi + next ]
+  cmp rax, qword ptr [ rdi + bufferend ]
+  jge resize
+
+appendnow:
+  mov byte ptr [rax], sil
+  inc rax
+  mov qword ptr [ rdi + next ], rax
+  ret
+
+resize:
+  push rsi
+  push rdi
+  mov esi, 1
+  call reserveadd
+  pop rdi
+  pop rsi
+  mov rax, qword ptr [ rdi + next ]
+  jmp appendnow
+end;*)
 
 procedure TStrBuilder.append(const s: RawByteString);
 var
@@ -1228,6 +1268,11 @@ end;
 procedure TStrBuilder.appendRaw(const s: RawByteString);
 begin
   append(pchar(pointer(s)), length(s));
+end;
+
+procedure TStrBuilder.reserveAdd1;
+begin
+  reserveadd(1);
 end;
 
 procedure TStrBuilder.appendCodePoint(const codepoint: integer);
@@ -2315,30 +2360,35 @@ begin
   if length(result) = 0 then arrayAdd(result, '');
 end;
 
-function strWrap(Line: string; MaxCol: Integer; const BreakChars: TCharSet): string;
+function strWrap(Line: string; MaxCol: SizeInt; const BreakChars: TCharSet): string;
 begin
   result := strJoin(strWrapSplit(line, MaxCol, BreakChars), LineEnding);
 end;
 
 function strReverse(s: string): string;
 var
-  oldlen, charlen: SizeInt;
   len: sizeint;
-  p: PChar;
+  p, pe, oldp, tempp: PChar;
   q: Pchar;
 begin
   p := pointer(s);
   len := length(s);
+  pe := p + len;
   result := '';
+  if len = 0 then exit;
   SetLength(result, len);
   q := pointer(result) + len;
-  while len > 0 do begin
-    oldlen := len;
-    strDecodeUTF8Character(p, len);
-    charlen := oldlen - len;
-    q := q - charlen;
-    move((p-charlen)^, q^, charlen);
+  while p < pe do begin
+    oldp := p;
+    strDecodeUTF8Character(p, pe);
+    tempp := p - 1;
+    while tempp >= oldp do begin
+      dec(q);
+      q^ := tempp^;
+      dec(tempp);
+    end;
   end;
+  assert(q = pointer(result));
 end;
 
 //Given a string like openBracket  .. openBracket  ... closingBracket closingBracket closingBracket closingBracket , this will return everything between
@@ -2945,6 +2995,7 @@ var
 
 var
   i: SizeInt;
+  sourceend: pchar;
 begin
   dest := '';
   if len = 0 then exit;
@@ -2977,9 +3028,10 @@ begin
     end;
     CP_UTF8: begin
       SetLength(dest, len);
+      sourceend := source + len;
       outlen := 0;
-      while len > 0 do
-         writeCodepoint(strDecodeUTF8Character(source, len));
+      while source < sourceend do
+         writeCodepoint(strDecodeUTF8Character(source, sourceend));
       if outlen <> length(dest) then SetLength(dest, outlen);
     end;
     CP_WINDOWS1252: begin
@@ -3178,6 +3230,21 @@ begin
     end;
   end;
 end;
+function strEncodingName(e: TSystemCodePage): string;
+begin
+  e := strActualEncoding(e);
+  case e of
+    CP_UTF8: result := 'UTF-8'; //XML prefers uppercase
+    CP_UTF16BE, CP_UTF16: result := 'UTF-16'; //XML does not need BE/LE in name
+    CP_UTF32BE, CP_UTF32: result := 'UTF-32';
+    1250..1258: result := 'windows-'+IntToStr(e);
+    else begin
+      result := CodePageToCodePageName(e);
+      if result = '' then
+        result := 'cp' + inttostr(e);
+    end;
+  end;
+end;
 {$ENDIF}
 
 
@@ -3367,6 +3434,17 @@ begin
 end;
 
 
+procedure strDecodeHexToBuffer(const s:string; buffer: PByte; bufferlen: sizeint);
+var
+  i: SizeInt;
+begin
+  assert(length(s) and 1 = 0);
+  if 2*bufferlen > length(s) then bufferlen := length(s) div 2;
+  for i:=0 to bufferlen - 1 do
+    buffer[i] := (charDecodeHexDigit(s[2*i+1]) shl 4) or charDecodeHexDigit(s[2*i+2]);
+end;
+
+
 function strEscape(s: string; const toEscape: TCharSet; escapeChar: ansichar): string;
 var
   i: SizeInt;
@@ -3421,8 +3499,11 @@ var
   last: SizeInt;
   pescape: PChar;
 begin
+  result := '';
+  if length(s) = 0 then exit;
   if escape = '' then begin
-    result := {%H-}strDecodeHex(s);
+    setlength(result, length(s) div 2);
+    strDecodeHexToBuffer(s, pbyte(result), length(result));
     exit;
   end;
   start := pos(escape, s);
@@ -3465,15 +3546,10 @@ begin
   result:=strDecodeHTMLEntities(pansichar(s), length(s), encoding, flags);
 end;
 
+
 function strDecodeHex(s: string): string;
-var
-  i: SizeInt;
 begin
-  assert(length(s) and 1 = 0);
-  result := '';
-  setlength(result, length(s) div 2);
-  for i:=1 to length(result) do
-    result[i] := chr((charDecodeHexDigit(s[2*i-1]) shl 4) or charDecodeHexDigit(s[2*i]));
+  result := strUnescapeHex(s, '');
 end;
 
 function strEncodeHex(s: string; const code: string): string;
@@ -3530,7 +3606,7 @@ end;
 
 
 
-function strJoin(const sl: TStrings; const sep: string  = ', '; limit: Integer=0; const limitStr: string='...'): string; overload;
+function strJoin(const sl: TStrings; const sep: string  = ', '; limit: integer=0; const limitStr: string='...'): string; overload;
 var i:Integer;
 begin
   Result:='';
@@ -3607,7 +3683,7 @@ function StrToBoolDef(const S: string;const Def:Boolean): Boolean;
 
 Var
   foundDot, foundExp: boolean;
-  i: Integer;
+  i: sizeint;
 begin
   if s = '' then
     result := def //good idea? probably for StrToBoolDef(@attribute, def) and if @attribute is missing (=> '') it should def
@@ -3904,7 +3980,7 @@ function strResolveURI(rel, base: string): string;
 var
   schemaLength: SizeInt;
   baseIsAbsolute: Boolean;
-  fileSchemaPrefixLength: Integer;
+  fileSchemaPrefixLength: sizeint;
   returnBackslashes: Boolean;
   i: SizeInt;
 begin
@@ -4018,7 +4094,7 @@ function strSimilarity(const s, t: string): SizeInt;
 //see http://en.wikipedia.org/wiki/Levenshtein_distance
 var v: array[0..1] of array of SizeInt;
   i,j : SizeInt;
-  cost, v0, v1: Integer;
+  cost, v0, v1: sizeint;
 begin
   if s = t then begin result := 0; exit; end;
   if s = '' then begin result := length(t); exit; end;
@@ -5349,16 +5425,29 @@ var
     nodeLen, i: Integer;
     acceptPos: pchar;
     nextNode: pchar;
+    noSpecialCharBlockStart: PAnsiChar;
 begin
   encoding := strActualEncoding(encoding);
   builder.init(@result, l, encoding);
+  noSpecialCharBlockStart := p;
   lastChar:=@p[l-1];
   with builder do begin
     while (p<=lastChar) do begin
       //see https://www.w3.org/TR/html5/syntax.html#tokenizing-character-references
       case p^ of
         //#0: break;
+        #13: begin
+          if noSpecialCharBlockStart < p then append(noSpecialCharBlockStart, p - noSpecialCharBlockStart);
+          inc(p);
+          if dhefNormalizeLineEndings in flags then begin
+            append(#10);
+            if (p <= lastChar) and (p^ = #10) then inc(p);
+          end else append(#13);
+          noSpecialCharBlockStart := p;
+        end;
+
         '&': begin
+          if noSpecialCharBlockStart < p then append(noSpecialCharBlockStart, p - noSpecialCharBlockStart);
           inc(p);
           marker := p;
           case p^ of
@@ -5386,6 +5475,7 @@ begin
                 //no characters match the range
                 append('&');
                 p := marker;
+                noSpecialCharBlockStart := p;
                 continue;
               end;
               case p^ of
@@ -5397,10 +5487,11 @@ begin
                 parseError;
               end else case entity of
                 $0001..$0008, $000B, $000D..$001F, $007F, $FDD0..$FDEF: parseError;
-                low(ENCODING_MAP_WINDOWS1252_TO_UNICODE)..high(ENCODING_MAP_WINDOWS1252_TO_UNICODE): begin
-                  entity := ENCODING_MAP_WINDOWS1252_TO_UNICODE[entity];
-                  parseError;
-                end;
+                low(ENCODING_MAP_WINDOWS1252_TO_UNICODE)..high(ENCODING_MAP_WINDOWS1252_TO_UNICODE):
+                  if dhefWindows1252Extensions in flags then begin
+                    entity := ENCODING_MAP_WINDOWS1252_TO_UNICODE[entity];
+                    parseError;
+                  end;
                 else if (entity and $FFFE) = $FFFE then parseError;
               end;
               appendCodePoint(entity);
@@ -5411,7 +5502,7 @@ begin
               case p^ of
                  'A'..'Z': entityCodeStartPtr := @entityCodeStarts[ord(p^)-ord('A'),0];
                  'a'..'z': entityCodeStartPtr := @entityCodeStarts[ord(p^)-ord('a') + 26,0];
-                 else begin append('&'); continue; end;
+                 else begin append('&'); noSpecialCharBlockStart := p; continue; end;
               end;
               inc(p);
               entity := -1;
@@ -5423,6 +5514,7 @@ begin
                  if p^ = ';' then parseError; //todo: add parse error, when digit and semicolon after arbitrary many alphas
                  append('&');
                  p := marker;
+                 noSpecialCharBlockStart := p;
                  continue;
               end;
 
@@ -5499,13 +5591,14 @@ begin
                 append('&');
             end;
           end;
+          noSpecialCharBlockStart := p;
         end;
-        else begin
-          append(p^);
-          inc(p);
-        end;
+
+
+        else inc(p);
       end;
     end;
+    if noSpecialCharBlockStart < p then append(noSpecialCharBlockStart, p - noSpecialCharBlockStart);
   end;
   builder.final;
 end;
@@ -5555,7 +5648,15 @@ end;
 
 function TBBStringHelper.DecodeHex: String;
 begin
-  result := strDecodeHex(self);
+  result := strUnescapeHex(self, '');
+end;
+
+function TBBStringHelper.DecodeHexToBytes: TBytes;
+begin
+  result := nil;
+  if length = 0 then exit;
+  setlength(result, length div 2);
+  strDecodeHexToBuffer(self, pbyte(result), system.length(result));
 end;
 
 function TBBStringHelper.RemoveFromLeft(chopoff: SizeInt): String;

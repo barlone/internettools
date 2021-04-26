@@ -180,7 +180,9 @@ type
 
   //============================XQUERY CONTEXTS==========================
 
-  //** Static context containing values read during parsing and not changed during evaluation. Mostly corresponds to the "static context" in the XQuery spec
+  //** Static context containing default values and values read during parsing and not changed during evaluation. Mostly corresponds to the "static context" in the XQuery spec
+  //**
+  //** If a query contains multiple queries (e.g. from importing modules), each query can have its own static context.
   TXQStaticContext = class
   private
     FNodeCollation: TXQCollation;  // default collation used for node name comparisons (extension, does not exist in XQuery)
@@ -217,6 +219,7 @@ type
     strictTypeChecking: boolean;  //**< Activates strict type checking. If enabled, things like "2" + 3 raise an exception, otherwise it is evaluated to 5. Does not affect *correct* queries (and it makes it slower, so there is no reason to enable this option unless you need compatibility to other interpreters)
     useLocalNamespaces: boolean;  //**< When a statically unknown namespace is encountered in a matching expression it is resolved using the in-scope-namespaces of the possible matching elements
     jsonPXPExtensions: boolean; //**< Allows further json extensions, going beyond jsoniq (especially child and descendant axis test matching object properties) (for dot operator, see TXQParsingOptions) (default is true)
+    AllowJSONiqOperations: boolean; //**< Allows implicit casting of objects/arrays to boolean/string.
 
     model: TXQParsingModel;
 
@@ -292,7 +295,7 @@ type
     TextNode: TTreeNode; //**< Use this to override the text node returned by text(). This is useful if you have an element <a>xx<b/>yy</a>. If TextNode is nil text() will return xx, but you can set it to yy. However, ./text() will always return xx.
 
     SeqValue: IXQValue; //**<Context item / value of @code( . ),  if a sequence is processed (nil otherwise)
-    SeqIndex, SeqLength: integer; //**<Position in the sequence, if there is one
+    SeqIndex, SeqLength: SizeInt; //**<Position in the sequence, if there is one
 
     temporaryVariables: TXQEvaluationStack; //**< List of variables defined in the outside scope (e.g. for/same/every)
     globallyDeclaredVariables: TXQVariableChangeLog; //**< List of variables declared variables (e.g. declare variable $foo...) (might be nil)
@@ -320,8 +323,8 @@ type
     procedure raiseXPDY0002ContextItemAbsent;
   private
     procedure setContextItem(const v: IXQValue);
-    procedure setContextItem(const v: IXQValue; index, length: integer);
-    procedure getContextItem(out v: IXQValue; out index, length: integer);
+    procedure setContextItem(const v: IXQValue; index, length: SizeInt);
+    procedure getContextItem(out v: IXQValue; out index, length: SizeInt);
   end;
   PXQEvaluationContext = ^TXQEvaluationContext;
 
@@ -348,7 +351,7 @@ type
   TXQSerializerInsertWhitespace = (xqsiwNever, xqsiwConservative, xqsiwIndent);
   TXQSerializerOnString = procedure (const s: string) of object;
   TXQSerializerOnNode = function (const n: TTreeNode; html: boolean): boolean of object;
-  TXQSerializerOnAttribute = function (const n: TTreeAttribute; html: boolean): boolean of object;
+  TXQSerializerOnAttribute = procedure (const n: TTreeAttribute; html: boolean) of object;
   TXQSerializer = object(TJSONXHTMLStrBuilder)
     nodeFormat: TTreeNodeSerialization;
     allowDuplicateNames: boolean;
@@ -380,7 +383,7 @@ type
     procedure error(const code: string; message: string; value: TXQValue);
   protected
     indentCache: string;
-    indentLevel: integer;
+    indentLevel: SizeInt;
     sequenceTag: string;// = 'seq';
     elementTag: string;// = 'e';
     objectTag: string;// = 'object';
@@ -423,7 +426,7 @@ type
       tempcontext: TXQEvaluationContext;
       func: TXQValueFunction;
       stack: TXQEvaluationStack;
-      stacksize: Integer;
+      stacksize: SizeInt;
       //prepares calls to f on outerContext.
       //It pushes a sufficient number of temp values on the stack (override with stack.topptr), so that the function can be called.
       //Note that pushing can change all stack addresses, invalidating all pointers to the stack (i.e., if you use this in a function called by the interpreter, the function arguments become inaccessible)
@@ -499,12 +502,13 @@ type
     function toDateTime: TDateTime;  //**< Returns the value as dateTime; dynamically converted, if necessary
     function toNode: TTreeNode;  //**< Returns the value as node; or nil if it is no node
     function toArray: TXQVArray;  //**< Returns the value as array; dynamically converted, if necessary.  @br If the value is a single element, the array contains that element; if it is a sequence, the array contains each element of the sequence
+    function toBinaryBytes: TBytes;
     function toXQVList: TXQVList;  //**< Returns a TXQVList of all values contained in the implicit sequence. (if the type is not a sequence, it is considered to be a single element sequence). (this list is not an interface, don't forget to free it! This is the only interface method returning a non-auto-freed value.)
     function toXQuery: string; //**< Converts the value to an XQuery expression that evaluates to an equal value again (intended for debugging, not serialization, so no guarantees)
     function toValue: TXQValue;
 
-    function getSequenceCount: integer;  //**< Returns the number of values actually contained in this value (0 for undefined, element count for sequences, and  1 for everything else)
-    function get(i: integer): IXQValue; //**< Returns the i-th value in this sequence. (non-sequence values are considered to be sequences of length 1) (1-based index)
+    function getSequenceCount: SizeInt;  //**< Returns the number of values actually contained in this value (0 for undefined, element count for sequences, and  1 for everything else)
+    function get(i: SizeInt): IXQValue; //**< Returns the i-th value in this sequence. (non-sequence values are considered to be sequences of length 1) (1-based index)
     function hasProperty(const name: string; value: PXQValue): boolean; //**< Checks if an object has a certain property, and returns the property value directly (i.e. changing value^ will change the value stored in the object). @br The value is returned as TXQValue not IXQValue. (You can pass nil for value, if you don't need the value)
     function hasProperty(const name: IXQValue; value: PXQValue): boolean; //**< Checks if an object has a certain property, and returns the property value directly (i.e. changing value^ will change the value stored in the object). @br The value is returned as TXQValue not IXQValue. (You can pass nil for value, if you don't need the value)
     function getProperty(const name: string): IXQValue; //**< Returns an object property. Returns empty sequence for non objects.
@@ -546,7 +550,7 @@ type
 
     function instanceOf(const typ: TXSType): boolean; //**< If the XPath expression "self instance of typ" should return true.  (abbreviation for typeAnnotation.derivedFrom(..) )
 
-    property Count: integer read getSequenceCount;
+    property Count: SizeInt read getSequenceCount;
 
 
     //**Same as toFloat, but throws an exception if the conversion is not invalid
@@ -597,12 +601,13 @@ type
     function toDateTime: TDateTime; virtual; //**< Returns the value as dateTime; dynamically converted, if necessary
     function toNode: TTreeNode; virtual; //**< Returns the value as node, or nil if it is not a node
     function toArray: TXQVArray; virtual; //**< Returns the value as array; dynamically converted, if necessary.  @br If the value is a single value, the array contains just this value; if it is a sequence, the array contains all members of the sequence
+    function toBinaryBytes: TBytes; virtual;
     function toXQVList: TXQVList; virtual; //**< Converts the TXQValue dynamically to a TXQVList sequence (Beware: you have to free the list)
     function toXQuery: string; virtual; //**< Converts the value to an XQuery expression that evaluates to an equal value again (intended for debugging, not serialization, so no guarantees)
     function toValue: TXQValue;
 
-    function getSequenceCount: integer; virtual; //**< Returns the number of values actually contained in this value (0 for undefined, element count for sequences, and  1 for everything else)
-    function get(i: integer): IXQValue; virtual; //**< Returns the i-th value in this sequence. (non-sequence values are considered to be sequences of length 1)
+    function getSequenceCount: SizeInt; virtual; //**< Returns the number of values actually contained in this value (0 for undefined, element count for sequences, and  1 for everything else)
+    function get(i: SizeInt): IXQValue; virtual; //**< Returns the i-th value in this sequence. (non-sequence values are considered to be sequences of length 1)
     function hasProperty(const {%H-}name: string; {%H-}value: PXQValue): boolean; virtual; //**< Checks if an object has a certain property, and returns the property value directly (i.e. changing value^ will change the value stored in the object). @br The value is returned as TXQValue not IXQValue. (You can pass nil for value, if you don't need the value)
     function hasProperty(const {%H-}name: ixqvalue; {%H-}value: PXQValue): boolean; virtual; //**< Checks if an object has a certain property, and returns the property value directly (i.e. changing value^ will change the value stored in the object). @br The value is returned as TXQValue not IXQValue. (You can pass nil for value, if you don't need the value)
     function getProperty(const name: IXQValue): IXQValue; virtual; //**< Returns an object property. Returns empty sequence for non objects.
@@ -664,7 +669,9 @@ type
     class procedure release(v: TXQValue); static;
     class function hash(const v: IXQValue): uint32; static;
     class function equal(const v, w: IXQValue): boolean; static;
-    class function isStringKeyLike(const v: TXQValue): boolean; static;
+    //assuming v is an atomic value
+    class function isKeyStringLike(const v: TXQValue): boolean; static;
+    class function isStringLikeAfterAtomize(const v: TXQValue): boolean; static;
     class function isAtomicKeyValue(const v: IXQValue): boolean; static; inline;
   end;
 
@@ -678,7 +685,7 @@ type
     function isUndefined: boolean; override;
     function toArray: TXQVArray; override;
     function toXQVList: TXQVList; override;
-    function getSequenceCount: integer; override;
+    function getSequenceCount: SizeInt; override;
     function clone: IXQValue; override;
 
     procedure jsonSerialize(var serializer: TXQSerializer); override; overload;
@@ -848,7 +855,7 @@ type
     function toFloatChecked(scontext: TXQStaticContext): xqfloat; override;
     function hashCode: uint32; override;
 
-    function toRawBinary: string;
+    function toBinaryBytes: TBytes; override;
 
     class function compare(a, b: TXQValue): TXQCompareResult; static;
 
@@ -933,7 +940,7 @@ type
   TXQValueSequence = class (TXQValue)
     seq: TXQVList;    //**< list of the contained sequence values.
 
-    constructor create(capacity: integer = 0);
+    constructor create(capacity: SizeInt = 0);
     constructor create(firstChild: IXQValue);
     constructor create(list: TXQVList);
 
@@ -955,8 +962,8 @@ type
     function toArray: TXQVArray; override; //**< Returns all elements as array
     function toXQVList: TXQVList; override; //**< Returns all elements as list (which must be freed by the caller)
 
-    function getSequenceCount: integer; override;
-    function get(i: integer): IXQValue; override;
+    function getSequenceCount: SizeInt; override;
+    function get(i: SizeInt): IXQValue; override;
     function GetEnumeratorPtrUnsafe: TXQValueEnumeratorPtrUnsafe; override;
     function map(const q: string): IXQValue; override;
     function order(const q: string): IXQValue; override;
@@ -969,8 +976,8 @@ type
     function stringifyNodes: IXQValue; override;
     function hasNodes: boolean; override;
 
-    procedure add(const value: IXQValue); inline;  //**< Simply adds a value to the sequence (notice that a xpath sequence cannot contain another sequence, so they will be merged)
-    procedure addOrdered(const node: IXQValue); inline; //**< Adds a value to a sequence of nodes sorted in document order(notice that a xpath sequence cannot contain another sequence, so they will be merged)
+    procedure add(const value: IXQValue); inline;  //**< Simply adds a value to the sequence (notice that an xpath sequence cannot contain another sequence, so they will be merged)
+    procedure addOrdered(const node: IXQValue); inline; //**< Adds a value to a sequence of nodes sorted in document order(notice that an xpath sequence cannot contain another sequence, so they will be merged)
 
     destructor Destroy; override;
   end;
@@ -1013,7 +1020,7 @@ type
                                                                {
   TXQPropertyEnumeratorInternal = class
     vars: TXQVariableChangeLog;
-    idx: integer;
+    idx: SizeInt;
     hashmapEnumerator: TXQHashmapStrOwningXQValue.TKeyPairEnumerator;
   end;                                                        }
 
@@ -1087,6 +1094,7 @@ type
     procedure setMutable(const name: string; const v: IXQValue); reintroduce; //**< Changes a property
     procedure setMutable(const name: string; const s: string); reintroduce; //**< Changes a property (string wrapper)
 
+    function setImmutable(const name, value: IXQValue): TXQValueMapLike; overload; override;
     function setImmutable(const name: string; const v: IXQValue): TXQValueMapLike; overload; override; //**< Creates a new object with the same values as the current one and changes a property of it
 
     procedure enumeratePropertyKeys(var keyset: TXQHashsetStr); override;
@@ -1200,7 +1208,7 @@ type
     seq: TXQVList;
 
     constructor create(takeList: TXQVList); reintroduce; virtual;
-    constructor create(capacity: integer = 0); reintroduce; virtual;
+    constructor create(capacity: SizeInt = 0); reintroduce; virtual;
 
     class function classKind: TXQValueKind; override;
 
@@ -1296,7 +1304,7 @@ type
     //term is used for error handling, arguments are on the stack
     function evaluate(const outerContext: TXQEvaluationContext; const term: TXQTerm): IXQValue; //**< Calls the function with the given arguments. Evaluation context is the context the function was defined in.
     function evaluateInContext(var inContext: TXQEvaluationContext; const term: TXQTerm): IXQValue; //**< Calls the function with the given arguments. Evaluation context is the context the function was defined in.
-    procedure contextOverrideParameterNames(const inContext: TXQEvaluationContext; count: integer);
+    procedure contextOverrideParameterNames(const inContext: TXQEvaluationContext; count: SizeInt);
 
     function directClone: TXQValue;
     function clone: IXQValue; override;
@@ -1641,7 +1649,7 @@ type
   TXQVCustomList = class(specialize TFastInterfaceList<IXQValue>)
   protected
     procedure sortInDocumentOrderUnchecked; //**< Sorts the nodes in the list in document order. Does not check if they actually are nodes
-    procedure insertSingle(i: integer; const child: IXQValue); inline; //**< Inserts a IXQValue to the sequence. Does not perform sequence flattening
+    procedure insertSingle(i: SizeInt; const child: IXQValue); inline; //**< Inserts a IXQValue to the sequence. Does not perform sequence flattening
   public
     procedure addInArray(const value: IXQValue); inline;
 
@@ -1651,9 +1659,9 @@ type
 
   (*** @abstract(List of TXQValue-s). If a sequence is inserted/added, it is flattened, so only the contained items are added  *)
   TXQVList = class(TXQVCustomList)
-    constructor create(acapacity: integer = 0);
+    constructor create(acapacity: SizeInt = 0);
     constructor create(other: TXQVCustomList);
-    procedure insert(i: integer; value: IXQValue); reintroduce; //**< Adds an IXQValue to the sequence. (Remember that XPath sequences are not allowed to store other sequences, so if a sequence it passed, only the values of the other sequence are added, not the sequence itself)
+    procedure insert(i: SizeInt; value: IXQValue); reintroduce; //**< Adds an IXQValue to the sequence. (Remember that XPath sequences are not allowed to store other sequences, so if a sequence it passed, only the values of the other sequence are added, not the sequence itself)
     procedure add(const value: IXQValue); reintroduce; //**< Adds an IXQValue to the sequence. (Remember that XPath sequences are not allowed to store other sequences, so if a sequence it passed, only the values of the other sequence are added, not the sequence itself)
     procedure addOrdered(const node: IXQValue); //**< Adds an IXQValue to a node sequence. Nodes are sorted in document order and duplicates are skipped. (Remember that XPath sequences are not allowed to store other sequences, so if a sequence it passed, only the values of the other sequence are added, not the sequence itself)
     procedure add(node: TTreeNode);
@@ -1667,16 +1675,16 @@ type
   TXQEvaluationStack = class(TXQVCustomList)
   private
     {$ifdef TRACK_STACK_VARIABLE_NAMES}debugNames: array of string;{$endif}
-    procedure failTop(const name: TXQTermVariable; i: integer = 0);
+    procedure failTop(const name: TXQTermVariable; i: SizeInt = 0);
   public
     procedure push(const value: ixqvalue);
     procedure pop();
-    procedure popTo(newCount: integer);
-    function top(i: integer = 0): IXQValue;
-    function topptr(i: integer = 0): PIXQValue; inline;
+    procedure popTo(newCount: SizeInt);
+    function top(i: SizeInt = 0): IXQValue;
+    function topptr(i: SizeInt = 0): PIXQValue; inline;
 
     procedure push(const name: TXQTermVariable; const v: ixqvalue); inline;
-    function top(const name: TXQTermVariable; i: integer = 0): IXQValue; inline;
+    function top(const name: TXQTermVariable; i: SizeInt = 0): IXQValue; inline;
   end;
 
   (***
@@ -1700,10 +1708,10 @@ type
   TXQFunctionParameterTypes = record
     types: array of TXQTermSequenceType;
     returnType: TXQTermSequenceType;
-    function serialize: string;
+    function serialize(separator: string = ''): string;
     function clone: TXQFunctionParameterTypes;
-    procedure raiseErrorMessage(values: PIXQValue; count: integer; const context: TXQEvaluationContext; term: TXQTerm; const addendum: string);
-    procedure checkOrConvertTypes(values: PIXQValue; count: integer; const context:TXQEvaluationContext; term: TXQTerm);
+    procedure raiseErrorMessage(values: PIXQValue; count: SizeInt; const context: TXQEvaluationContext; term: TXQTerm; const addendum: string);
+    procedure checkOrConvertTypes(values: PIXQValue; count: SizeInt; const context:TXQEvaluationContext; term: TXQTerm);
   end;
   PXQFunctionParameterTypes = ^TXQFunctionParameterTypes;
 
@@ -1760,7 +1768,7 @@ type
     procedure initialize();
     destructor Destroy; override;
   end;
-  //**Information about a xquery binary operator
+  //**Information about an xquery binary operator
   TXQOperatorFlags = set of (xqofAssociativeSyntax, //if the syntax is associative. (not the semantic!). e.g. @code(1 + 2 + 3) is valid, but @code(1 eq 2 = true()) is a syntax error;
                              xqofCastUntypedToString,
                              xqofCastUntypedToDouble,
@@ -2005,7 +2013,7 @@ type
   TXQTermVariable = class(TXQTerm)
     namespace: string;
     value: string; //this is the name, not the value
-    index: integer;
+    index: SizeInt;
 
 //    constructor create(const avalue: string; staticContext: TXQStaticContext);
     constructor create(const avalue: string; const anamespace: TNamespace = nil);
@@ -2397,7 +2405,7 @@ type
   TXQTermJSONLookup = class(TXQTermWithChildren)
     mode: TXQTermJSONLookupMode;
     unary: boolean;
-    integerKey: integer;
+    integerKey: SizeInt;
     propname: string;
     constructor create(aunary: boolean);
     function evaluate(var context: TXQEvaluationContext): IXQValue; override;
@@ -2409,7 +2417,7 @@ type
     document: TTreeDocument;
     root: TTreeNode;
     baseOffset: TTreeNodeIntOffset;
-    olddocumentnamespacecount: Integer;
+    olddocumentnamespacecount: SizeInt;
     namespaceOverrides: TNamespaceList;
   end;
 
@@ -2544,7 +2552,7 @@ type
     constructor create(aerrcode, amessage: string; anamespace: INamespace = nil);
     class function searchClosestFunction(const addr: pointer): string;
   private
-    rawMessageLength: integer;
+    rawMessageLength: SizeInt;
     function messagePrefix: string;
     function rawMessage: string;
   end;
@@ -2577,13 +2585,13 @@ type
   //TXQDefineVariableEvent = procedure(sender: TObject; const variable: string; const value: IXQValue) of object;
 
   (***
-    @abstract(Event callback that is called to set the @code(value) of a XQuery variable declared as "declare variable ... external").
+    @abstract(Event callback that is called to set the @code(value) of an XQuery variable declared as "declare variable ... external").
 
     The return value can be created with one of the xqvalue(..) functions.
   *)
   TXQDeclareExternalVariableEvent = procedure(sender: TObject; const context: TXQStaticContext; const namespaceUrl, variable: string; var value: IXQValue) of object;
   (***
-  @abstract(Event callback that is called to set a function @code(value) of a XQuery function declared as "declare function ... external").
+  @abstract(Event callback that is called to set a function @code(value) of an XQuery function declared as "declare function ... external").
 
   The function in @code(result) has already been initialized with the parameters and result type, only the term in @code(result.body) has to be set.@br
   You can either create an syntax tree for the function with the respective TXQTerm classes or derive a class from TXQTerm and override the evaluate function to calculate it natively.
@@ -2637,14 +2645,14 @@ type
   (***
     @abstract(@bold(This is the XPath/XQuery-engine))
 
-    You can use this class to evaluate a XPath/XQuery-expression on a certain document tree.@br
+    You can use this class to evaluate an XPath/XQuery-expression on a certain document tree.@br
     For example, @code(TXQueryEngine.evaluateStaticXPath2('expression', nil)) returns the value of the evaluation of expression.
 
     A simple functional interface is provided by the function query.@br@br
 
-    @bold(Syntax of a XQuery / XPath / Pseudo-XPath-Expression)
+    @bold(Syntax of an XQuery / XPath / Pseudo-XPath-Expression)
 
-    This query engine currently supports XPath 2.0, XQuery 1.0 and JSONiq, with some extensions and minor deviations, as well as parts of XPath 3.0 and XQuery 3.0.
+    This query engine currently supports XPath 3.1, XQuery 3.1, and JSONiq, with some extensions and minor deviations, as well as compatibility modes for older XPath and XQuery versions.
     @br@br
 
     A formal syntax definition of these languages is given at: http://www.w3.org/TR/xpath20/ , http://www.w3.org/TR/xquery/ , http://www.jsoniq.org/ ,
@@ -2689,7 +2697,7 @@ type
     Extended syntax:@br
 
     @unorderedList(
-    @item(@code(x"something{$var}{1+2+3}...") @br If a string is prefixed with an x, all expressions within {..}-parenthesis are evaluated and concattenated to the raw text, similarily to the value of a xquery direct attribute constructor. (option: extended-strings))
+    @item(@code(x"something{$var}{1+2+3}...") @br If a string is prefixed with an x, all expressions within {..}-parenthesis are evaluated and concatenated to the raw text, similarily to the value of an xquery direct attribute constructor. (option: extended-strings))
     @item(@code(var:=value) @br This assigns the value @code(value) to the global variable @code(var) and returns @code(value)
                             @br So you can e.g. write @code(((a := 2) + 3)) and get @code(5) and a variable @code($a) with the value @code(2)
                             @br @code($a := 2) is also allowed
@@ -2743,7 +2751,7 @@ type
     The simplest way to use it with the function query and the defaultQueryEngine.
 
     You can evaluate XQuery/XPath-expressions by calling the class methods, e.g. @code(TXQueryEngine.evaluateStaticXPath3('expression', nil)) or @code(TXQueryEngine.evaluateStaticXPath2('expression', nil).toInt64) which returns the value of the expression, converted to the corresponding type.@br
-    If you want to process a html/xml document, you have to pass the root TTreeNode (obtained by TTreeParser) instead of nil.@br@br@br
+    If you want to process an HTML/XML document, you have to pass the root TTreeNode (obtained by TTreeParser) instead of nil.@br@br@br
     If you call @code(TXQueryEngine.evaluateStaticXPath3('expression', nil)) without a following toType-call, you obtain the result as an IXQValue. (see IXQValue on how to use it)@br
     With a toType-call it is converted in the corresponding type, e.g. @code(toInt64) returns a int64, @code(toString) a string, @code(toNode) a TTreeNode or @code(toFloat) an extended. @br@br
 
@@ -2758,6 +2766,7 @@ type
     @unorderedList(
     @item(Language changes:
       @unorderedList(
+        @item(The XPath 3.1 syntax for JSON objects or arrays is used; previously it used the JSONiq syntax. There are various compatibility options to choose a custom syntax.)
         @item(Function and type names are now case sensitive.)
         @item(The function pxp:filter has been removed to avoid confusion with the function fn:filter. (The replacement pxp:extract has existed for years))
         @item(Declarations in XQuery need to be separated by @code(;) and conflicting declarations or non-module queries containing only declarations are forbidden )
@@ -2771,6 +2780,8 @@ type
     )
     @item(API changes to previous versions:
       @unorderedList(
+      @item(IXQValue.toString on a sequence or array returns the concatenated strings of all contained values. Previously, it only returned the first.)
+      @item(It assumes the default codepage is UTF-8. (before FreePascal 3.0 there was no default codepage) )
       @item(IXQValue.getChild was renamed to get, TXQValueSequence.addChild to add and addChildMerging to addOrdered. "child" never made any sense here)
       @item(ParentElement/RootElement/TextElement have been moved from TXQueryEngine to TXQEvaluationContext. Avoid using them, just pass the element to @code(evaluate). )
       @item(Callbacks for external variables/functions have been changed to ask for a namespace URI instead a namespace object with URI/prefix (for 3's EQNames which do not have a prefix) )
@@ -2800,8 +2811,8 @@ type
     VariableChangelog: TXQVariableChangeLog;  //**< All global variables that have been set (if a variable was overriden, it stores the old and new value)
 
     OnDeclareExternalVariable: TXQDeclareExternalVariableEvent;
-    OnDeclareExternalFunction: TXQDeclareExternalFunctionEvent; //**< Event called to import a function that is declared as "declare function ... external" in a XQuery expression.
-    OnImportModule: TXQImportModuleEvent;  //**< Event called to import a XQuery module that has not previously be defined
+    OnDeclareExternalFunction: TXQDeclareExternalFunctionEvent; //**< Event called to import a function that is declared as "declare function ... external" in an XQuery expression.
+    OnImportModule: TXQImportModuleEvent;  //**< Event called to import an XQuery module that has not previously be defined
 
     OnTrace: TXQTraceEvent; //**< Event called by fn:trace
     OnCollection, OnUriCollection: TXQEvaluateVariableEvent; //**< Event called by fn:collection
@@ -2869,7 +2880,7 @@ public
     //** Evaluates an expression with a certain tree element as current node.
     class function evaluateStaticCSS3(expression: string; tree:TTreeNode = nil): IXQValue;
 
-    procedure registerModule(module: IXQuery);  //**< Registers an XQuery module. A XQuery module is created by parsing (not evaluating) a XQuery expression that contains a "module" declaration
+    procedure registerModule(module: IXQuery);  //**< Registers an XQuery module. An XQuery module is created by parsing (not evaluating) a XQuery expression that contains a "module" declaration
     function findModule(const namespaceURL: string): TXQuery; //**< Finds a certain registered XQuery module
     function findModule(context: TXQStaticContext; const namespace: string; const at: array of string): TXQuery; //**< Finds a certain registered XQuery module or tries to load one
     class function findNativeModule(const ns: string): TXQNativeModule; //**< Finds a native module.
@@ -2914,6 +2925,7 @@ public
     LastDebugInfo: TXQDebugInfo;
 
     class procedure registerNativeModule(const module: TXQNativeModule);
+    {$ifdef DUMPFUNCTIONS}class procedure dumpFunctions;{$endif}
 
     function getEvaluationContext(staticContextOverride: TXQStaticContext = nil): TXQEvaluationContext;
 
@@ -2987,7 +2999,7 @@ public
 
 type
   (***
-  @abstract(A XQuery variable)
+  @abstract(An XQuery variable)
 
   consisting of a name with namespace and a value.
 
@@ -3035,14 +3047,14 @@ type
     function get(const name: string): IXQValue; //**< Returns the value of the variable @code(name) @br The returned interface points to the same instance as the interface in the internal variable storage
     function get(const name: string;  const namespaceURL: string): IXQValue; //**< Returns the value of the variable @code(name) @br The returned interface points to the same instance as the interface in the internal variable storage
 
-    function get(i: integer): IXQValue; inline; //**< Value of the variable at index @code(i)  @br The returned interface points to the same instance as the interface in the internal variable storage
-    function indexOf(const name: string; const namespaceURL: string = ''): integer; //**< Returns the last index of the variable @code(name) in the internal list. (Warning: doesn't support objects, yet??) It is recommended to use hasVariable instead, the index is an implementation detail
+    function get(i: SizeInt): IXQValue; inline; //**< Value of the variable at index @code(i)  @br The returned interface points to the same instance as the interface in the internal variable storage
+    function indexOf(const name: string; const namespaceURL: string = ''): SizeInt; //**< Returns the last index of the variable @code(name) in the internal list. (Warning: doesn't support objects, yet??) It is recommended to use hasVariable instead, the index is an implementation detail
 
-    function getName(i: integer): string; //**< Name of the variable at index @code(i)
-    function getNamespace(i: integer): string; //**< Namespace of the variable at index @code(i)
+    function getName(i: SizeInt): string; //**< Name of the variable at index @code(i)
+    function getNamespace(i: SizeInt): string; //**< Namespace of the variable at index @code(i)
     function getAll(const name: string; const namespaceURL: string = ''): IXQValue; //**< Returns all values of the variable with name @name(name) as sequence
     function getString(const name:string): string; //**< Returns a value as string. This is the same as get(name).toString.
-    function isPropertyChange(i: integer): boolean;
+    function isPropertyChange(i: SizeInt): boolean;
 
     //** Returns if a variable with name @param(variable) exists
     function hasVariable(const variable: TXQTermVariable): boolean;
@@ -3055,15 +3067,15 @@ type
 
     property Values[name:string]:IXQValue read get write add; default;
     property ValuesString[name:string]:string read getString write add;
-    property Names[i: integer]: string read getName;
+    property Names[i: SizeInt]: string read getName;
 
     constructor create();
     destructor destroy();override;
 
     procedure clear; //**< Clear everything
     procedure remove(const name: string; const namespace: string = '');
-    function pushAll: integer; //**< Marks the current state of the variables (in O(1))
-    procedure popAll(level: integer = -1); //**< Reverts all variables to the latest marked state
+    function pushAll: SizeInt; //**< Marks the current state of the variables (in O(1))
+    procedure popAll(level: SizeInt = -1); //**< Reverts all variables to the latest marked state
 
 
     procedure stringifyNodes;
@@ -3088,16 +3100,16 @@ type
     function toStringMap: TXQValueStringMap;
   protected
     shared: boolean;
-    varCount, historyCount: integer;
+    varCount, historyCount: SizeInt;
     varstorage: array of TXQVariable;
-    histories: array of integer;
+    histories: array of SizeInt;
     procedure removeLast;
 
     procedure pushOpenArray(const vs: array of IXQValue);
     procedure pushOpenArray(const untypedStrings: array of string);
-    procedure reserve(newcap: integer);
+    procedure reserve(newcap: SizeInt);
   public
-    property count: integer read varcount;
+    property count: SizeInt read varcount;
   end;
 
 
@@ -3183,6 +3195,7 @@ public
   //function findBinaryOp(const name: string; model: TXQParsingModel = xqpmXQuery3_1): TXQOperatorInfo;
 
   function findSimilarFunctionsDebug(searched: TList; const localname: string): string;
+  {$ifdef DUMPFUNCTIONS}procedure dumpFunctions;{$endif}
 protected
   basicFunctions, complexFunctions, interpretedFunctions: TXQMapStringOwningObject;
   binaryOpLists: TXQMapStringOwningObject;
@@ -3197,7 +3210,7 @@ procedure requiredArgCount(argc: sizeint; minc: sizeint; maxc: sizeint = -2);
 procedure requiredArgType(const v: IXQValue; typ: TXSType);
 
 //**Calculates starting position / length from a range definition (checks for things like NaN, INF, ...) (internally used)
-procedure xpathRangeDefinition(argc: sizeint; args: PIXQValue; const maxLen: longint; out from, len: integer);
+procedure xpathRangeDefinition(argc: sizeint; args: PIXQValue; const maxLen: sizeint; out from, len: sizeint);
 function xqvalueAtomize(const v: IXQValue): IXQValue;
 
 function xqvalueDeep_equal(const context: TXQEvaluationContext; const a, b: IXQValue; collation: TXQCollation): boolean;  //needed for switch, tests
@@ -3409,6 +3422,12 @@ var
 
   const ALL_CONTEXT_DEPENDENCIES = [xqcdFocusItem, xqcdFocusPosition, xqcdFocusLast, xqcdContextCollation, xqcdContextTime, xqcdContextVariables, xqcdContextOther];
   const ALL_CONTEXT_DEPENDENCIES_FOCUS = [xqcdFocusItem, xqcdFocusPosition, xqcdFocusLast];
+
+type TGlobalCurrentQueryInfo = record
+  AllowJSONiqOperations: boolean;
+  property CastStringMapKeysToString: boolean read AllowJSONiqOperations;
+end;
+threadvar globalCurrentQueryInfo: TGlobalCurrentQueryInfo;
 
 
 
@@ -3649,7 +3668,7 @@ end;
 
 destructor TXQTempTreeNodes.destroy;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i:= 0 to tempnodes.count - 1 do
     TTreeNode(tempnodes[i]).freeAll();
@@ -3851,7 +3870,7 @@ begin
   stableSort(@fbuffer[0], @fbuffer[fcount-1], sizeof(IXQValue), @compareXQInDocumentOrder);
 end;
 
-procedure TXQVCustomList.insertSingle(i: integer; const child: IXQValue);
+procedure TXQVCustomList.insertSingle(i: SizeInt; const child: IXQValue);
 begin
   insert(i, child);
 end;
@@ -3865,8 +3884,8 @@ end;
 
 procedure TXQVCustomList.revert;
 var
- h: Integer;
- i: Integer;
+ h: SizeInt;
+ i: SizeInt;
 begin
   if count=0 then exit;
   h :=count-1;
@@ -3881,7 +3900,7 @@ begin
 end;
 
 
-constructor TXQVList.create(acapacity: integer);
+constructor TXQVList.create(acapacity: SizeInt);
 begin
   reserve(acapacity);
   fcount := 0;
@@ -3892,7 +3911,7 @@ begin
   add(other);
 end;
 
-procedure TXQVList.insert(i: integer; value: IXQValue);
+procedure TXQVList.insert(i: SizeInt; value: IXQValue);
 var
  v: PIXQValue;
 begin
@@ -3911,7 +3930,7 @@ end;
 
 procedure TXQVList.add(const value: IXQValue);
 var
- othercount: Integer;
+ othercount: SizeInt;
  enumerator: TXQValueEnumeratorPtrUnsafe;
 begin
   assert(value <> nil);
@@ -3938,7 +3957,7 @@ end;
 
 procedure TXQVList.addOrdered(const node: IXQValue);
 var
- a,b,m, cmp: Integer;
+ a,b,m, cmp: SizeInt;
  s: PIXQValue;
  childnode: TTreeNode;
 begin
@@ -3999,7 +4018,7 @@ end;
 
 procedure TXQVList.add(list: TXQVCustomList);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to list.Count - 1 do list.fbuffer[i]._AddRef;
   reserve(count + list.Count);
@@ -4009,14 +4028,14 @@ end;
 
 procedure TXQVList.addOrdered(list: TXQVList);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to list.Count - 1 do addOrdered(list.fbuffer[i]);
 end;
 
 function TXQVList.stringifyNodes: TXQVList;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result := TXQVList.create(Count);
   for i := 0 to Count - 1 do
@@ -4025,7 +4044,7 @@ end;
 
 function TXQVList.hasNodes: boolean;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to Count - 1 do
     if fbuffer[i].hasNodes then exit(true);
@@ -4116,7 +4135,7 @@ end;
 
 function xqvalue(sl: TStringList): IXQValue;
 var
-  i: Integer;
+  i: SizeInt;
   list: TXQVList;
 begin
   if sl.Count = 0 then exit(xqvalue());
@@ -4142,7 +4161,7 @@ end;
 function xqvalue(const sl: array of string): IXQValue;
 var
   resseq: TXQValueSequence;
-  i: Integer;
+  i: SizeInt;
 begin
   resseq := TXQValueSequence.create(length(sl));
   for i := 0 to high(sl) do
@@ -4154,7 +4173,7 @@ end;
 function xqvalue(const sl: array of IXQValue): IXQValue;
 var
   resseq: TXQValueSequence;
-  i: Integer;
+  i: SizeInt;
 begin
   resseq := TXQValueSequence.create(length(sl));
   for i := 0 to high(sl) do
@@ -4223,7 +4242,7 @@ end;
 
 
 
-function xqvalueDecimalEqualInt(const d: IXQValue; const index: integer): boolean;
+function xqvalueDecimalEqualInt(const d: IXQValue; const index: SizeInt): boolean;
 begin
   result := d.toDecimal = index;
 end;
@@ -4242,22 +4261,30 @@ begin
 end;
 
 
-function TXQFunctionParameterTypes.serialize: string;
+function TXQFunctionParameterTypes.serialize(separator: string = ''): string;
 var
-  j: Integer;
+  j: SizeInt;
+  humanReadable: Boolean;
 begin
-  result := '(';
+  result := '';
+  humanReadable := separator = '';
+  if humanReadable then separator := ', ';
+  if humanReadable then result := '(';
   for j := 0 to high(types) do begin
-    if j <> 0 then result += ', ';
+    if j <> 0 then result += separator;
     result += types[j].serialize;
   end;
-  result += ')';
-  if returnType <> nil then result += ' as ' + returnType.serialize
+  if humanReadable then result += ')';
+  if returnType <> nil then begin
+    if humanReadable then result += ' as '
+    else result += separator;
+    result += returnType.serialize
+  end;
 end;
 
 function TXQFunctionParameterTypes.clone: TXQFunctionParameterTypes;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result := self;
   SetLength(result.types, length(types));
@@ -4267,23 +4294,37 @@ begin
     result.returnType := TXQTermSequenceType(returnType.clone);
 end;
 
-procedure TXQFunctionParameterTypes.raiseErrorMessage(values: PIXQValue; count: integer; const context: TXQEvaluationContext;
+procedure TXQFunctionParameterTypes.raiseErrorMessage(values: PIXQValue; count: sizeint; const context: TXQEvaluationContext;
   term: TXQTerm; const addendum: string);
-var
-  errCode, errMessage, name: String;
-  i: Integer;
-begin
-  errCode := 'XPTY0004';
-  for i := 0 to high(types) do
-    if not (types[i].kind in [tikFunctionTest, tikElementTest, tikAny, tikArrayTest, tikMapTest, tikJSONiqTest]) and (values[i].kind in [pvkFunction, pvkObject]) then begin
-     errCode := 'FOTY0013'; //wtf?
-     break;
-    end else if (context.staticContext.model in PARSING_MODEL3)
-              and (types[i].kind = tikAtomic) and (types[i].atomicTypeInfo.storage = TXQValueQName)
-              and ((values[i].kind = pvkNode) or values[i].instanceOf(baseSchema.untypedAtomic)) then begin
-     errCode := 'XPTY0117'; //wtf?
-     break;
+var errCode: string = 'XPTY0004';
+  function needsSpecialErrorCode(st: TXQTermSequenceType; const v: IXQValue): boolean;
+  begin
+    result := false;
+    if not (st.kind in [tikFunctionTest, tikElementTest, tikAny, tikArrayTest, tikMapTest, tikJSONiqTest]) then begin
+      case v.kind of
+        pvkFunction, pvkObject: begin
+          errCode := 'FOTY0013';
+          exit(true);
+        end;
+        pvkArray: if v.Size = 1 then exit(needsSpecialErrorCode(st, (v as TXQValueJSONArray).seq[0]));
+        else;
+      end;
     end;
+    if (context.staticContext.model in PARSING_MODEL3)
+              and (st.kind = tikAtomic) and (st.atomicTypeInfo.storage = TXQValueQName)
+              and ((v.kind = pvkNode) or v.instanceOf(baseSchema.untypedAtomic)) then begin
+     errCode := 'XPTY0117';
+     exit(true);
+    end;
+  end;
+
+var
+  errMessage, name: String;
+  i: SizeInt;
+begin
+  for i := 0 to high(types) do
+    if needsSpecialErrorCode(types[i], values[i]) then
+      break;
   name := '';
   if (term is TXQTermNamedFunction) and (TXQTermNamedFunction(term).func is TXQAbstractFunctionInfo) then
     name := 'function ' + TXQAbstractFunctionInfo(TXQTermNamedFunction(term).func).name
@@ -4302,10 +4343,10 @@ begin
   term.raiseEvaluationError(errCode, errMessage);
 end;
 
-procedure TXQFunctionParameterTypes.checkOrConvertTypes(values: PIXQValue; count: integer; const context: TXQEvaluationContext;
+procedure TXQFunctionParameterTypes.checkOrConvertTypes(values: PIXQValue; count: sizeint; const context: TXQEvaluationContext;
   term: TXQTerm);
 var
-  j: Integer;
+  j: SizeInt;
 begin
   for j := 0 to count -1 do
     if types[j].kind <> tikFunctionTest then begin
@@ -4359,7 +4400,7 @@ end;
 
 function TXQPathMatchingStep.serialize: string;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result := '';
   if typ <> tneaFunctionSpecialCase then begin
@@ -4367,7 +4408,7 @@ begin
      case typ of
        tneaSameNode: result := 'self::';
        tneaDirectParent: result := 'parent::';
-       tneaDirectChild: result := 'child::';
+       tneaDirectChild: result := '';//child::';
        tneaDirectChildImplicit: result := '';
        tneaSameOrDescendant: result := 'same-or-descendant::';
        tneaDescendant: result := 'descendant::';
@@ -4381,20 +4422,27 @@ begin
        tneaFunctionSpecialCase: result := '(:special-case::)';
        else result := '???';
      end;
-   if qmElement in matching then result += 'element';
-   if qmText in matching then result += 'text';
-   if qmComment in matching then result += 'comment';
-   if qmProcessingInstruction in matching then result += 'document';
-   if qmAttribute in matching then result += 'attribute';
-   if qmDocument in matching then result += 'document';
-   result += '(';
-   if qmCheckNamespacePrefix in matching then result += 'Q{'+namespaceURLOrPrefix+'}';
-   if qmCheckNamespaceURL in matching then result += namespaceURLOrPrefix + ':';
-   if qmValue in matching then result += value;
-   if qmCheckOnSingleChild in matching then result += '(:single child:)';
+   if (matching = [qmElement,qmText,qmComment,qmProcessingInstruction,qmAttribute,qmDocument]) and (requiredType = nil)  then result += 'node()'
+   else if (matching = [qmElement,qmAttribute]) and (requiredType = nil) then result += '@*'
+   else if (matching = [qmValue, qmElement, qmCheckNamespaceURL]) and (requiredType = nil) then result := 'Q{}' + value
+   else begin
+     if qmElement in matching then result += 'element';
+     if qmText in matching then result += 'text';
+     if qmComment in matching then result += 'comment';
+     if qmProcessingInstruction in matching then result += 'processing-instruction';
+     if qmAttribute in matching then result += 'attribute';
+     if qmDocument in matching then result += 'document-node';
+     result += '(';
+     if qmCheckNamespaceURL in matching then
+       if namespaceURLOrPrefix = 'http://www.w3.org/2010/xslt-xquery-serialization' then result += 'output:'
+       else result += 'Q{'+namespaceURLOrPrefix+'}';
+     if qmCheckNamespacePrefix in matching then result += namespaceURLOrPrefix + ':';
+     if qmValue in matching then result += value;
+     if qmCheckOnSingleChild in matching then result += 'element(*)';
 
-   if requiredType <> nil then result += ', '+requiredType.serialize;
-   result += ')';
+     if requiredType <> nil then result += ', '+requiredType.serialize;
+     result += ')';
+   end;
   end;
   for i := 0 to high(filters) do
     result += '[' + filters[i].filter.ToString + ']';
@@ -4402,7 +4450,7 @@ end;
 
 function TXQPathMatchingStep.clone: TXQPathMatchingStep;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result.typ := typ;
   result.namespaceURLOrPrefix := namespaceURLOrPrefix;
@@ -4424,7 +4472,7 @@ end;
 
 procedure TXQPathMatchingStep.destroy;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to high(filters) do filters[i].filter.free;
   requiredType.Free;
@@ -4661,7 +4709,7 @@ procedure TXQInterpretedFunctionInfo.initialize();
 var
   temp: TXQueryEngine;
   tempQuery: TXQuery;
-  i: Integer;
+  i: SizeInt;
   needNewEngine: Boolean;
 begin
   if definition <> nil then exit;
@@ -4774,7 +4822,7 @@ var nativeModules: TStringList;
 class function EXQException.searchClosestFunction(const addr: pointer): string;
 const terms: array[1..40] of TXQTermClass = (TXQTermWithChildren, TXQTermVariable, TXQTermSequenceType, TXQTermDefineFunction, TXQTerm, TXQTermWithChildren, TXQTermConstant, TXQTermSequence, TXQTermJSONArray, TXQTermSequenceType, TXQTermVariable, TXQTermDefineVariable, TXQTermDefineFunction, TXQTermNodeMatcher, TXQTermFilterSequence, TXQTermPatternMatcher, TXQTermNamedFunction, TXQTermDynamicFunctionCall, TXQTermBinaryOp  , TXQTermFlowerSubClause, TXQTermFlowerLet, TXQTermFlowerFor, TXQTermFlowerWindow, TXQTermFlowerLetPattern, TXQTermFlowerForPattern, TXQTermFlowerWhere, TXQTermFlowerOrder, TXQTermFlowerCount, TXQTermFlowerGroup, TXQTermFlower, TXQTermSomeEvery, TXQTermIf, TXQTermTypeSwitch, TXQTermSwitch, TXQTermReadObjectProperty, TXQTermConstructor, TXQTermMapConstructor, TXQTermJSONiqObjectConstructor, TXQTermTryCatch, TXQTermModule);
 var
-  i, j: Integer;
+  i, j: SizeInt;
   module: TXQNativeModule;
   delta: PtrUInt;
   procedure checkAddr(tocheck: pointer; name: string); inline;
@@ -4985,7 +5033,7 @@ begin
 end;
 
 
-function TXQVariableChangeLog.get(i: integer): IXQValue; inline;
+function TXQVariableChangeLog.get(i: SizeInt): IXQValue; inline;
 begin
   result := varstorage[i].value;
 end;
@@ -5084,9 +5132,26 @@ begin
   result := GlobalInterpretedNativeFunctionStaticContext.equalDeepAtomic(v,w,nil);
 end;
 
-class function TXQValueOwnershipTracker.isStringKeyLike(const v: TXQValue): boolean;
+class function TXQValueOwnershipTracker.isKeyStringLike(const v: TXQValue): boolean;
 begin
   result := (v.kind = pvkString) and (v.instanceOf(baseSchema.string_) or v.instanceOf(baseSchema.untypedAtomic) or v.instanceOf(baseSchema.anyURI))
+end;
+
+class function TXQValueOwnershipTracker.isStringLikeAfterAtomize(const v: TXQValue): boolean;
+var
+  w: TXQValue;
+begin
+  case v.kind of
+    pvkString: result := (v.instanceOf(baseSchema.string_) or v.instanceOf(baseSchema.untypedAtomic) or v.instanceOf(baseSchema.anyURI));
+    pvkNode: result := true;
+    pvkSequence, pvkArray: begin
+      result := false;
+      for w in v.GetEnumeratorArrayTransparentUnsafe do
+        if result or not isStringLikeAfterAtomize(w) then exit(false)
+        else result := true;
+    end
+    else result := false;
+  end;
 end;
 
 class function TXQValueOwnershipTracker.isAtomicKeyValue(const v: IXQValue): boolean;
@@ -5115,14 +5180,14 @@ function xqvalueDeep_equal(const context: TXQEvaluationContext; const a, b: IXQV
     result := true;
     for pp2 in standardMap.getEnumeratorPropertiesUnsafe do begin
       k := pp2.key.toValue;
-      if not TXQValueOwnershipTracker.isStringKeyLike(k) then
+      if not TXQValueOwnershipTracker.isKeyStringLike(k) then
         exit(false);
       if not stringMap.hasProperty(k.toString, @tempv) then exit(false)
       else if not xqvalueDeep_equal(context, pp2.Value, tempv, collation) then exit(false);
     end;
   end;
 
-var i, j:integer;
+var i, j:SizeInt;
     enum1, enum2, enum1array, enum2array: TXQValueEnumeratorPtrUnsafe;
     pa, pb: PIXQValue;
     tempv: TXQValue;
@@ -5201,79 +5266,97 @@ begin
   result := true;
 end;
 
-
-procedure xpathRangeDefinition(argc: sizeint; args: PIXQValue; const maxLen: longint; out from, len: integer);
-var unti: integer;  //excluding last
-  temp: BigDecimal;
-  temp64: SizeInt64;
-  f: xqfloat;
+type TRangeSpecial = (rsNormal, rsInfinity, rsBigDecimal);
+procedure xpathRangeDefinition(argc: sizeint; args: PIXQValue; const maxLen: sizeint; out from, len: SizeInt);
+var
+  from64, len64, until64: SizeInt64;
+  fromF, lenF, untilF: xqfloat;
+label exitWithZeroLength, exitFromFromTillInfinity;
 begin
-  case args[1].kind of
-    pvkInt64: from := args[1].toInt64;
-    pvkFloat: begin
-      f := args[1].toFloat;
-      if f.isFinite() then
-        from := round(f.round())
-       else if f.IsNegativeInfinity() then begin
-         from := 1;
-         if argc <= 2 then len := maxLen
-         else len := 0;
-         exit;
-       end else begin //+inf, nan
-         from := 1;
-         len := 0;
-         exit;
-       end;
-    end;
-    {pvkBigDecimal:}else begin
-      temp := round(args[1].toDecimal);
-      if temp.signed then from := 1
-      else if temp > high(integer) then begin
+  if args[1].kind = pvkInt64 then begin
+    //sane fast path
+    //todo: check if int64 fit in double, because the standard is double only?
+    from64 := args[1].toInt64;
+    if from64 > maxLen then goto exitWithZeroLength;
+    if argc = 2 then begin
+      if from64 >= 1 then from := from64
+      else from := 1;
+      goto exitFromFromTillInfinity;
+    end else if args[2].kind = pvkInt64 then begin
+      len64 := args[2].toInt64;
+      //intersect the [from64,from64+len64[ range with the allowed [1,maxLen] range
+      if len64 <= 0 then goto exitWithZeroLength; //this is written so weirdly to avoid overflows. Like now knowing len64 is positive, we can add negative numbers, but not positive ones
+      if from64 >= 1 then begin
+        from := from64;
+        if len64 >= maxLen - from + 1 then goto exitFromFromTillInfinity;
+        len := len64
+      end else begin
+        until64 := from64 + len64;
         from := 1;
-        len := 0;
-        exit;
-      end else from := BigDecimalToLongint(temp);
+        if until64 <= 0 then goto exitWithZeroLength;
+        if until64 > maxLen then goto exitFromFromTillInfinity;
+        len := until64 - {from}1;
+      end;
+      exit
     end;
   end;
 
-  if from > maxLen then begin len := 0; exit; end;
 
-  if argc = 3 then begin
-    case args[2].kind of
-      pvkInt64: begin
-        temp64 := args[2].toInt64;
-        if temp64 < 0 then unti := from
-        else if (temp64 > high(integer))  or ( (from > 0) and (temp64 > high(integer) - from) ) then unti := maxlen + 1
-        else unti := from + temp64;
-      end;
-      pvkFloat: begin
-        f := args[2].toFloat;
-        if f.isFinite() then
-          unti := from + round(f.round)
-        else if f.IsPositiveInfinity then unti := maxLen+1
-        else begin //nan, -inf
-          len := 0;
-          exit;
-        end;
-      end;
-      else begin
-        temp := round(args[2].toDecimal);
-        if temp.signed then unti := from
-        else if (temp > high(integer)) or ( (from > 0) and (temp > high(Integer) - from ) ) then unti := maxLen + 1
-        else unti := from + BigDecimalToLongint(temp);
-      end;
+  //standard double path
+  fromF := args[1].toFloat;
+  if fromF.isFinite then begin
+    fromF := fromF.round();
+    if fromF > maxLen then goto exitWithZeroLength;
+  end else if fromF.IsNegativeInfinity then begin
+    from := 1;
+    if argc <= 2 then len := maxLen
+    else len := 0;
+    exit;
+  end else goto exitWithZeroLength;
+
+  if argc <= 2 then begin
+    if fromF >= 1 then from := trunc(fromF)
+    else from := 1;
+    goto exitFromFromTillInfinity;
+  end;
+
+  lenF := args[2].toFloat;
+  if lenF.isFinite() then begin
+    lenF := lenF.round;
+    if lenF <= 0 then goto exitWithZeroLength;
+    if fromF >= 1 then begin
+      from := trunc(fromF);
+      if lenF >= maxLen - from + 1 then goto exitFromFromTillInfinity;
+      len := trunc(lenF);
+    end else begin
+      untilF := fromF + lenF;
+      from := 1;
+      if untilF <= 0 then goto exitWithZeroLength;
+      if untilF > maxLen then goto exitFromFromTillInfinity;
+      len := trunc(untilF) - {from}1;
     end;
-  end else unti := maxLen + 1;
+    exit;
+  end else if lenF.IsPositiveInfinity then begin
+    if fromF >= 1 then from := trunc(fromF)
+    else from := 1;
+    goto exitFromFromTillInfinity;
+  end else len := 0;
 
-  if from < 1 then from := 1;
-  if unti > maxLen + 1 then unti := maxLen + 1;
-  len := unti-from;
-  if len < 0 then len := 0;
+  exit;
+
+exitWithZeroLength:
+  from := 1;
+  len := 0;
+  exit;
+
+exitFromFromTillInfinity:
+  len := maxLen - from + 1;
+  exit;
 end;
 
 function xqFunctionConcat(argc: SizeInt; args: PIXQValue): IXQValue;
 var temp:string;
- i: Integer;
+ i: SizeInt;
 begin
   temp:='';
   for i:=0 to argc-1 do begin
@@ -5334,7 +5417,7 @@ end;
 
 function TXQVariableChangeLog.toStringMap: TXQValueStringMap;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result := TXQValueStringMap.create();
   for i := 0 to count - 1 do
@@ -5398,7 +5481,7 @@ end;
 
 procedure TXQVariableChangeLog.setOverride(const n: string; const v: ixqvalue; const namespaceURL: string);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   i := indexOf(n, namespaceURL);
   if i >= 0 then varstorage[i].value := v
@@ -5412,7 +5495,7 @@ begin
 end;
 
 function TXQVariableChangeLog.get(const name: string; const namespaceURL: string): IXQValue;
-var i:integer;
+var i:SizeInt;
 begin
   i := indexOf(name, namespaceUrl);
   if i = -1 then
@@ -5427,26 +5510,26 @@ begin
   result := get(name, '').toString;
 end;
 
-function TXQVariableChangeLog.isPropertyChange(i: integer): boolean;
+function TXQVariableChangeLog.isPropertyChange(i: SizeInt): boolean;
 begin
   result := varstorage[i].propertyChange;
 end;
 
-function TXQVariableChangeLog.indexOf(const name: string;  const namespaceURL: string): integer;
-var i:longint;
+function TXQVariableChangeLog.indexOf(const name: string;  const namespaceURL: string): sizeint;
+var i:sizeint;
 begin
   for i:=varCount - 1 downto 0 do
     if (varstorage[i].name = name) and (varstorage[i].namespaceURL = namespaceURL) then exit(i);
   exit(-1);
 end;
 
-function TXQVariableChangeLog.getName(i: integer): string;
+function TXQVariableChangeLog.getName(i: SizeInt): string;
 begin
   assert(i>=0); assert(i< count);
   result := varstorage[i].name;
 end;
 
-function TXQVariableChangeLog.getNamespace(i: integer): string;
+function TXQVariableChangeLog.getNamespace(i: SizeInt): string;
 begin
   assert(i>=0); assert(i< count);
   result := varstorage[i].namespaceURL;
@@ -5456,7 +5539,7 @@ end;
 
 function TXQVariableChangeLog.getAll(const name: string;  const namespaceURL: string): IXQValue;
 var
-  i: Integer;
+  i: SizeInt;
   list: TXQVList;
 begin
   result := xqvalue();
@@ -5469,7 +5552,7 @@ end;
 
 procedure TXQVariableChangeLog.clear;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   if readonly then raise EXQEvaluationException.Create('pxp:INTERNAL', 'readonly variable change log modified');
   if varCount > 256 then setlength(varstorage, 0)
@@ -5482,7 +5565,7 @@ end;
 
 procedure TXQVariableChangeLog.remove(const name: string; const namespace: string);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   if readonly then raise EXQEvaluationException.Create('pxp:INTERNAL', 'Readonly variable changelog modified');
   for i := count - 1 downto 0 do begin
@@ -5498,7 +5581,7 @@ begin
   end;
 end;
 
-function TXQVariableChangeLog.pushAll: integer;
+function TXQVariableChangeLog.pushAll: SizeInt;
 begin
   if readonly then raise EXQEvaluationException.Create('pxp:INTERNAL', 'readonly variable change log modified');
   if historyCount = length(histories) then
@@ -5509,8 +5592,8 @@ begin
   inc(historyCount);
 end;
 
-procedure TXQVariableChangeLog.popAll(level: integer = -1);
-var targetCount, targetHistoryCount, i: Integer;
+procedure TXQVariableChangeLog.popAll(level: SizeInt = -1);
+var targetCount, targetHistoryCount, i: SizeInt;
 begin
   if readonly then raise EXQEvaluationException.Create('pxp:INTERNAL', 'readonly variable change log modified');
   if level < 0 then targetHistoryCount := historyCount + level
@@ -5531,7 +5614,7 @@ end;
 
 procedure TXQVariableChangeLog.stringifyNodes;
 var
-  i: Integer;
+  i: SizeInt;
   pv: PIXQValue;
   xhasNodes: Boolean;
   list: TXQVList;
@@ -5558,7 +5641,7 @@ begin
 end;
 
 function TXQVariableChangeLog.hasNodes: boolean;
-var i: integer;
+var i: SizeInt;
 begin
   for i:=varCount - 1 downto 0 do
     if varstorage[i].value.hasNodes then exit(true);
@@ -5573,7 +5656,7 @@ end;
 
 procedure TXQVariableChangeLog.pushOpenArray(const vs: array of IXQValue);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   pushAll;
   for i := 0 to high(vs) do
@@ -5582,14 +5665,14 @@ end;
 
 procedure TXQVariableChangeLog.pushOpenArray(const untypedStrings: array of string);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   pushAll;
   for i := 0 to high(untypedStrings) do
     add('_'+IntToStr(i+1), TXQValueString.create(baseSchema.untypedAtomic, untypedStrings[i]));
 end;
 
-procedure TXQVariableChangeLog.reserve(newcap: integer);
+procedure TXQVariableChangeLog.reserve(newcap: SizeInt);
 begin
   if newcap <= length(varstorage) then exit;
   if newcap > 2 * length(varstorage) then SetLength(varstorage, newcap)
@@ -5606,7 +5689,7 @@ begin
 end;
 
 function TXQVariableChangeLog.debugTextRepresentation: string;
-var i:longint;
+var i:sizeint;
 begin
   if count = 0 then exit('');
   result:=getName(0)+'='+get(0).debugAsStringWithTypeAnnotation();
@@ -5632,7 +5715,7 @@ end;
 
 function TXQVariableChangeLog.finalValues: TXQVariableChangeLog;
 var final: boolean;
-    i,j: integer;
+    i,j: SizeInt;
 begin
   Result := TXQVariableChangeLog.Create;
   for i:=0 to count-1 do begin
@@ -5648,8 +5731,8 @@ begin
 end;
 
 function TXQVariableChangeLog.collected: TXQVariableChangeLog;
-var i: integer;
-  oldid, j: Integer;
+var i: SizeInt;
+  oldid, j: SizeInt;
   templist: TFPList; //list of sequences, so we do not need to cast ixqvalue -> txqvaluesequence
 begin
   result := TXQVariableChangeLog.create();
@@ -5686,7 +5769,7 @@ end;
 
 procedure TXQVariableChangeLog.takeFrom(other: TXQVariableChangeLog);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   reserve(varCount + other.count);
   for i:=0 to other.count-1 do
@@ -5695,7 +5778,7 @@ begin
   other.clear;
 end;
 
-procedure deleteVar(self: TXQVariableChangeLog; i: integer);
+procedure deleteVar(self: TXQVariableChangeLog; i: SizeInt);
 begin
   with self do begin
     varstorage[i].namespaceURL := ''; //free mem
@@ -5711,7 +5794,7 @@ function TXQVariableChangeLog.condensed: TXQVariableChangeLog;
 
 var
   temp: IXQValue;
-  i, last: Integer;
+  i, last: SizeInt;
 begin
   result := TXQVariableChangeLog.create();
   result.shared:=true;
@@ -5753,7 +5836,7 @@ end;
 
 function TXQVariableChangeLog.hasVariable(const variable: string; out value: IXQValue; const namespaceURL: string): boolean;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   i := indexOf(variable, namespaceURL);
   if i = -1 then
@@ -5785,9 +5868,9 @@ begin
   dec(fcount);
 end;
 
-procedure TXQEvaluationStack.popTo(newCount: integer);
+procedure TXQEvaluationStack.popTo(newCount: SizeInt);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   assert(newCount <= fcount);
   for i := newCount to fcount - 1 do
@@ -5796,13 +5879,13 @@ begin
   fcount := newCount;
 end;
 
-function TXQEvaluationStack.top(i: integer): IXQValue;
+function TXQEvaluationStack.top(i: SizeInt): IXQValue;
 begin
   assert((i >= 0) and (count - i - 1 >= 0));
   result := fbuffer[count - i - 1];
 end;
 
-function TXQEvaluationStack.topptr(i: integer): PIXQValue;
+function TXQEvaluationStack.topptr(i: SizeInt): PIXQValue;
 begin
   result := @fbuffer[count - i - 1];
 end;
@@ -5818,11 +5901,11 @@ begin
   push(v);
 end;
 
-procedure TXQEvaluationStack.failTop(const name: TXQTermVariable; i: integer);
+procedure TXQEvaluationStack.failTop(const name: TXQTermVariable; i: SizeInt);
 begin
   raise EXQEvaluationException.create('pxp:INTERNAL','Stack name mismatch: '+debugNames[count - i - 1]+' <> '+name.value);
 end;
-function TXQEvaluationStack.top(const name: TXQTermVariable; i: integer): IXQValue;
+function TXQEvaluationStack.top(const name: TXQTermVariable; i: SizeInt): IXQValue;
 begin
   result := top(i);
   {$ifdef TRACK_STACK_VARIABLE_NAMES}
@@ -5836,7 +5919,7 @@ end;
 
 procedure TXQBatchFunctionCall.init(const outerContext: TXQEvaluationContext; const f: ixqvalue; const def: IXQValue);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   func := f.toValue as TXQValueFunction;
   stack := outerContext.temporaryVariables;
@@ -5929,6 +6012,7 @@ begin
     if (jpoEscapeCharacters in options) then
       raise EXQEvaluationException.create('FOJS0005', 'fallback can''t be used with escape', nil, map);
     escapeFunction := vo as TXQValueFunction;
+    if length(escapeFunction.parameters) <> 1 then raiseInvalidParam();
   end;
   if jpoJSONiq in options then begin
     if map.hasProperty('jsoniq-multiple-top-level-items', @vo) then begin
@@ -5992,11 +6076,11 @@ var
         if striContains(scanner.CurTokenString, 'E')  then exit(baseSchema.double.createValue(tempd))
         else if strContains(scanner.CurTokenString, '.')  then exit(baseSchema.decimal.createValue(tempd))
         else exit(baseSchema.integer.createValue(tempd));
-      if TryStrToFloat(scanner.CurTokenString, tempFloat) then
+      if TryStrToFloat(scanner.CurTokenString, tempFloat, XQFormats) then
         if striContains(scanner.CurTokenString, 'E') then exit(baseSchema.double.createValue(tempFloat))
         else exit(TXQValueDecimal.create(tempFloat));
     end else begin
-      if TryStrToFloat(scanner.CurTokenString, tempFloat) then
+      if TryStrToFloat(scanner.CurTokenString, tempFloat, XQFormats) then
         exit(baseSchema.double.createValue(tempFloat))
     end;
     if (jpoLiberal in options) and ((scanner.CurTokenString = '+') or (scanner.CurTokenString = '-')) then begin
@@ -6016,7 +6100,7 @@ var
 
 
 var containerStack: array of TXQValue;
-    containerCount: integer;
+    containerCount: SizeInt;
     parsingPhase: ( jppArrayExpectValue, jppArrayExpectComma,
                    jppObjectExpectKey, jppObjectExpectComma, jppObjectExpectValue,
                    jppRoot);
@@ -6170,7 +6254,7 @@ var containerStack: array of TXQValue;
 
 
 var scannerOptions:  {$if FPC_FULLVERSION > 30000}TJSONOptions{$else}boolean{$endif};
-  i: Integer;
+  i: SizeInt;
 begin
   result := nil;
   currentContainer := nil;
@@ -6339,14 +6423,14 @@ begin
   SeqLength := 1;
 end;
 
-procedure TXQEvaluationContext.setContextItem(const v: IXQValue; index, length: integer);
+procedure TXQEvaluationContext.setContextItem(const v: IXQValue; index, length: SizeInt);
 begin
   SeqValue := v;
   SeqIndex := index;
   SeqLength:= length;
 end;
 
-procedure TXQEvaluationContext.getContextItem(out v: IXQValue; out index, length: integer);
+procedure TXQEvaluationContext.getContextItem(out v: IXQValue; out index, length: SizeInt);
 begin
   v := SeqValue;
   index := SeqIndex;
@@ -6397,7 +6481,7 @@ end;
 
 function TXQStaticContext.findModule(const namespaceURL: string): TXQuery;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   if (self = nil) or (importedModules = nil) then exit(nil);
 
@@ -6419,7 +6503,7 @@ end;
 
 function TXQStaticContext.findFunction(const anamespace, alocalname: string; const argcount: integer): TXQValueFunction;
 var
-  i: Integer;
+  i: SizeInt;
   f: TXQValueFunction;
 begin
   for i := high(functions) downto 0 do begin
@@ -6439,7 +6523,7 @@ end;
 
 function TXQStaticContext.findVariableDeclaration(const namespace, varname: string): TXQTermDefineVariable;
 var
-  i, mi, delta: Integer;
+  i, mi, delta: SizeInt;
   m: TXQTermModule;
   w: TXQTermVariable;
 begin
@@ -6466,7 +6550,7 @@ end;
 
 procedure TXQStaticContext.assign(sc: TXQStaticContext);
 var
-  i: Integer;
+  i: SizeInt;
   Result: TXQStaticContext;
 begin
   Result := self;
@@ -6510,6 +6594,8 @@ begin
     result.strictTypeChecking:=strictTypeChecking;
     Result.useLocalNamespaces:=useLocalNamespaces;
     result.jsonPXPExtensions := jsonPXPExtensions;
+    result.AllowJSONiqOperations := AllowJSONiqOperations;
+    result.model := model;
     if decimalNumberFormats <> nil then begin
       result.decimalNumberFormats:= TFPList.Create;
       for i := 0 to decimalNumberFormats.Count - 1 do
@@ -6530,7 +6616,7 @@ end;
 
 destructor TXQStaticContext.Destroy;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   FreeAndNil(associatedModules);
   FreeAndNil(importedModules);
@@ -6551,7 +6637,7 @@ end;
 
 function TXQStaticContext.findSchema(const namespace: string): TXSSchema;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   if namespace = baseSchema.url then exit(baseSchema);
   if importedSchemas <> nil then
@@ -6563,7 +6649,7 @@ end;
 
 function TXQStaticContext.findNamespace(const nsprefix: string; const defaultNamespaceKind: TXQDefaultNamespaceKind): TNamespace;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result := nil;
   if (moduleNamespace <> nil) and (moduleNamespace.getPrefix = nsprefix) then
@@ -7262,10 +7348,12 @@ end;
 
 function TXQuery.evaluate(var context: TXQEvaluationContext): IXQValue;
 var
-  stackSize: Integer;
+  stackSize: SizeInt;
+  oldAllowJSONiqOperations: Boolean;
 begin
   if fterm = nil then exit(xqvalue());
   stackSize := context.temporaryVariables.Count;
+  oldAllowJSONiqOperations := globalCurrentQueryInfo.AllowJSONiqOperations;
   try
     if (context.staticContext <> nil) and (staticContext.importedModules = nil) and not objInheritsFrom(fterm, TXQTermModule) then begin
       //fast track. also we want to use the functions declared in the old static context
@@ -7275,8 +7363,10 @@ begin
       staticContext.temporaryNodes.release;
       staticContext.temporaryNodes := nil;
     end;
+    globalCurrentQueryInfo.AllowJSONiqOperations := staticContext.AllowJSONiqOperations;
     result := fterm.evaluate(context);
   finally
+    globalCurrentQueryInfo.AllowJSONiqOperations := oldAllowJSONiqOperations;
     context.temporaryVariables.popTo(stackSize);
   end;
 end;
@@ -7385,7 +7475,7 @@ end;
 
 
 threadvar threadLocalCache: record
-   runningEngines: integer;
+   runningEngines: SizeInt;
    commonValues: array[TXQValueKind] of record
       head: PPointer; //This is a TXQValue. But we override the first bytes with a pointer to the previously freed element, so it cannot be used as TXQValue
       vmt: pointer;   //The first overriden bytes of the TXQValue. They should be the same between all TXQValues of one kind
@@ -7586,7 +7676,7 @@ begin
 end;
 
 class function TXQAbstractFunctionInfo.checkType(const v: IXQValue; const typ: TXQTermSequenceType; const context: TXQEvaluationContext): boolean;
-var atomicCount: integer;
+var atomicCount: SizeInt;
   function checkAtomicRecursion(const w: IXQValue): boolean;
     function fullAtomization: boolean;
     begin
@@ -7648,7 +7738,7 @@ end;
 
 function TXQAbstractFunctionInfo.getVersion(arity: integer): PXQFunctionParameterTypes;
 var
-  i: Integer;
+  i: sizeint;
 begin
   for i := 0 to high(versions) do
     if length(versions[i].types) = arity then exit(@versions[i]);
@@ -7657,7 +7747,7 @@ end;
 
 procedure TXQAbstractFunctionInfo.setVersionsShared(const v: array of TXQFunctionParameterTypes);
 var
-  i: Integer;
+  i: sizeint;
 begin
   SetLength(versions, length(v));
   for i := 0 to high(v) do
@@ -7759,7 +7849,7 @@ end;
 
 destructor TXQAbstractFunctionInfo.Destroy;
 var
-  i, j: Integer;
+  i, j: sizeint;
 begin
   if not sharedVersions then
     for i := 0 to High(versions) do begin
@@ -7773,7 +7863,7 @@ end;
 
 procedure TXQAbstractFunctionInfo.guessArgCount;
 var
-  i: Integer;
+  i: sizeint;
 begin
   if length(versions) = 0 then raise EXQParsingException.create('pxp:INIT', 'No argument count information');
   minArgCount:=high(minArgCount);
@@ -7791,7 +7881,7 @@ end;
 {$I xquery_types.inc}
 {$I xquery_schemas.inc}
 
-function sequenceFilterConditionSatisfied(const evaluatedCondition: IXQValue; const index: integer): boolean;
+function sequenceFilterConditionSatisfied(const evaluatedCondition: IXQValue; const index: SizeInt): boolean;
 begin
   case evaluatedCondition.kind of
     pvkUndefined: result := false;
@@ -8008,6 +8098,7 @@ begin
   //OnDefineVariable:= @VariableChangelog.defineVariable;
   GlobalNamespaces := TNamespaceList.Create;
   StaticContext := TXQStaticContext.Create;
+  StaticContext.model := xqpmXPath3_1;
   StaticContext.defaultFunctionNamespace := XMLNamespace_MyExtensionsMerged; XMLNamespace_MyExtensionsMerged._AddRef;
   StaticContext.sender := self;
   StaticContext.collation := internalDefaultCollation;
@@ -8025,7 +8116,11 @@ begin
   inc(threadLocalCache.runningEngines);
   FCreationThread := GetThreadID;
   DefaultJSONParser.init;
-  if AllowJSONDefaultInternal then DefaultJSONParser.options := [jpoAllowMultipleTopLevelItems, jpoLiberal, jpoAllowTrailingComma, jpoJSONiq];
+  if AllowJSONDefaultInternal then begin
+    DefaultJSONParser.options := [jpoAllowMultipleTopLevelItems, jpoLiberal, jpoAllowTrailingComma, jpoJSONiq];
+    StaticContext.AllowJSONiqOperations := true;
+    globalCurrentQueryInfo.AllowJSONiqOperations := true;
+  end;
 end;
 
 procedure threadSafetyViolated;
@@ -8494,7 +8589,7 @@ var pos: pchar;
   end;
 
   function pseudoOrNegation(elementName: string): TXQTerm;
-    function isNth(index: TXQTerm; a, b: integer): TXQTerm;
+    function isNth(index: TXQTerm; a, b: SizeInt): TXQTerm;
     begin
       if a = 0 then begin
         result := newBinOp(index, '=', TXQTermConstant.create(xqvalue(b)));
@@ -8532,7 +8627,7 @@ var pos: pchar;
 
   var
     t: String;
-    a, b: integer;
+    a, b: SizeInt;
     tn: String;
   begin
     expect(':');
@@ -8721,7 +8816,7 @@ end;
 class procedure TXQueryEngine.filterSequence(const sequence: IXQValue; outList: TXQVList; const filter: TXQPathMatchingStepFilter; var context: TXQEvaluationContext);
 var
  v: PIXQValue;
- i, backupA, backupB: Integer;
+ i, backupA, backupB: SizeInt;
  value, backupItem: IXQValue;
  i64: Int64;
  oldParent: TTreeNode;
@@ -8775,7 +8870,7 @@ begin
 end;
 
 class procedure TXQueryEngine.filterSequence(var result: IXQValue; const filter: TXQPathMatchingStepFilters; var context: TXQEvaluationContext);
-var i:integer;
+var i:SizeInt;
   list1, list2, temp: TXQVList;
   seq1, seq2: IXQValue;
 begin
@@ -8812,7 +8907,7 @@ var
   obj: TXQValue;
   temp: TXQValue;
   tempvi: PIXQValue;
-  i: Integer;
+  i: SizeInt;
 begin
   case node.kind of
     pvkArray: begin
@@ -8842,7 +8937,7 @@ var
 
   function filter(const v: IXQValue): TXQVList;
   var
-    i, lastfilter: Integer;
+    i, lastfilter: SizeInt;
     temp: TXQVList;
   begin
     //filtering is done with a swap list approach
@@ -8875,7 +8970,7 @@ var
 
 
 var
-  i: Integer;
+  i: SizeInt;
   tempContext: TXQEvaluationContext;
   onlyNodes: boolean;
   n: PIXQValue;
@@ -9075,6 +9170,15 @@ begin
   nativeModules.AddObject(module.namespace.getURL, module);
 end;
 
+{$ifdef DUMPFUNCTIONS}
+class procedure TXQueryEngine.dumpFunctions;
+var
+  i: SizeInt;
+begin
+  for i := 0 to nativeModules.count -  1 do
+    (nativeModules.Objects[i] as TXQNativeModule).dumpFunctions;
+end;
+{$endif}
 
 class function TXQueryEngine.getCollation(id: string; base: string; errCode: string): TXQCollation;
 var
@@ -9137,7 +9241,7 @@ end;
 
 class function TXQueryEngine.findNativeModule(const ns: string): TXQNativeModule;
 var
-  index: Integer;
+  index: SizeInt;
 begin
   index := nativeModules.IndexOf(ns);
   if index < 0 then exit(nil);
@@ -9146,11 +9250,11 @@ end;
 
 class function TXQueryEngine.findOperator(const pos: pchar): TXQOperatorInfo;
 var
-  i: Integer;
-  j: Integer;
-  bestMatch: Integer;
+  i: SizeInt;
+  j: SizeInt;
+  bestMatch: SizeInt;
   sl: TStringList;
-  k: Integer;
+  k: SizeInt;
 begin
   result := nil;
   bestMatch := 0;
@@ -9247,7 +9351,7 @@ end;
 
 function TXQTermModule.evaluate(var context: TXQEvaluationContext): IXQValue;
 var
-  i: Integer;
+  i: SizeInt;
   staticContext: TXQStaticContext;
 begin
 //  if (context.temporaryVariables <> nil) then  we cannot free them here, because it fails when a query calls another module
@@ -9303,7 +9407,7 @@ end;
 
 constructor TXQNativeModule.create(const anamespace: TNamespace; const aparentModule: array of TXQNativeModule);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   namespace := anamespace;
   namespace._AddRef;
@@ -9326,7 +9430,7 @@ end;
 
 destructor TXQNativeModule.Destroy;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   basicFunctions.Clear;
   complexFunctions.Clear;
@@ -9350,7 +9454,7 @@ end;
 {$ifdef dumpFunctionTypes}
 function pascalType(t: TXQTermSequenceType): string;
 var
-  i: Integer;
+  i: SizeInt;
   temp: String;
 begin
   if t = nil then exit('NIL???');
@@ -9408,7 +9512,7 @@ end;
 
 procedure logFunctionTypes(const name: string; info: TXQAbstractFunctionInfo);
 var
-  i, j: Integer;
+  i, j: SizeInt;
   v: TXQFunctionParameterTypes;
 begin
   writeln(name);
@@ -9542,7 +9646,7 @@ function TXQNativeModule.registerBinaryOp(const name: string; func: TXQBinaryOp;
   contextDependencies: TXQContextDependencies): TXQOperatorInfo;
 var
   spacepos: SizeInt;
-  i: Integer;
+  i: SizeInt;
   list: TStringList;
 begin
   result := TXQOperatorInfo.Create;
@@ -9573,7 +9677,7 @@ end;
 
 function TXQNativeModule.findBasicFunction(const name: string; argCount: integer; model: TXQParsingModel): TXQBasicFunctionInfo;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to high(parents) do begin
     result := parents[i].findBasicFunction(name, argCount, model);
@@ -9588,7 +9692,7 @@ end;
 
 function TXQNativeModule.findComplexFunction(const name: string; argCount: integer; model: TXQParsingModel): TXQComplexFunctionInfo;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to high(parents) do begin
     result := parents[i].findComplexFunction(name, argCount, model);
@@ -9603,7 +9707,7 @@ end;
 
 function TXQNativeModule.findInterpretedFunction(const name: string; argCount: integer; model: TXQParsingModel): TXQInterpretedFunctionInfo;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to high(parents) do begin
     result := parents[i].findInterpretedFunction(name, argCount, model);
@@ -9618,7 +9722,7 @@ end;
 
 {function TXQNativeModule.findBinaryOp(const name: string; model: TXQParsingModel): TXQOperatorInfo;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to high(parents) do begin
     result := parents[i].findBinaryOp(name, model);
@@ -9639,7 +9743,7 @@ function TXQNativeModule.findSimilarFunctionsDebug(searched: TList; const localn
   end;
   function functionName(const name: string; const f: TXQAbstractFunctionInfo): string;
   var
-    i, j: Integer;
+    i, j: SizeInt;
   begin
     result := name + ' ' + '#' + IntToStr(f.minArgCount);
     if f.minArgCount <> f.maxArgCount then result += '-' + IntToStr(f.maxArgCount);;
@@ -9659,7 +9763,7 @@ function TXQNativeModule.findSimilarFunctionsDebug(searched: TList; const localn
     result += LineEnding;
   end;
 var moduleResult: String;
-  i: Integer;
+  i: SizeInt;
 begin
   result := '';
   if searched.IndexOf(self) >= 0 then exit;
@@ -9674,7 +9778,7 @@ begin
       moduleResult += '    ' + functionName(complexFunctions[i], TXQComplexFunctionInfo(complexFunctions.Objects[i]));
   if moduleResult <> '' then begin
     result += '  In module ' + namespaceGetURL(namespace);
-    if equalNamespaces(namespace, XMLNamespace_XPathFunctions) then
+//    if equalNamespaces(namespace, XMLNamespace_XPathFunctions) then
       result += acceptedModels.requiredModelToString;
     result += ':'+LineEnding+moduleResult+LineEnding;
   end;
@@ -9684,29 +9788,47 @@ end;
 
 
 {$ifdef dumpFunctions}
-procedure TXQNativeModule.logFunctionCreation(const name: string; const info: TXQAbstractFunctionInfo; const typeChecking: array of string);
+var dumpedModules: array of TXQNativeModule;
+procedure TXQNativeModule.dumpFunctions();
 var
-  i: Integer;
-  version: String;
+  prefix,version: String;
+  procedure logFunction(f: TXQAbstractFunctionInfo);
+  var i: SizeInt;
+  begin
+    with f do begin
+      if length(versions) = 0 then
+        writeln(prefix,' name="', xmlStrEscape(name,true), '" min-arg-count="',minArgCount,'" max-arg-count="', maxArgCount,'"/>')
+      else
+        for i := 0 to high(versions) do begin
+          write(prefix,' name="', xmlStrEscape(name,true), '" arg-count="',length(versions[i].types),'" args="');
+          if i < length(versions) then write(xmlStrEscape(versions[i].serialize(';'), true));
+          writeln('"/>');
+        end;
+    end;
+  end;
+
+var i: SizeInt;
 begin
+//  writeln(self.namespace.getURL);
+  for i := 0 to high(dumpedModules) do if dumpedModules[i] = self then exit;
+  dumpedModules := concat(dumpedModules, [self]);
+  //const name: string; const info: TXQAbstractFunctionInfo; const typeChecking: array of string
   if xqpmXQuery1 in acceptedModels then version := '1.0'
-  else version := '3.0';
-  i := 0;
-  repeat
-    write('<f m="', xmlStrEscape(trim(namespace.getURL),true), '" version="'+version+'" name="', xmlStrEscape(name,true), '" args="');
-    if i < length(typeChecking) then write(xmlStrEscape(typeChecking[i], true))
-    else if info.minArgCount = info.maxArgCount then write(info.minArgCount, ' argument', IfThen(info.minArgCount = 1, '', 's'))
-    else write(info.minArgCount, ' to ',info.maxArgCount, ' arguments');
-    writeln('"/>');
-    inc(i);
-  until i >= length(typeChecking);
+  else if xqpmXQuery3_0 in acceptedModels then version := '3.0'
+  else version := '3.1';
+  prefix := '<f m="' + xmlStrEscape(trim(namespace.getURL),true) + '" version="'+version+'"';
+  for i := 0 to basicFunctions.Count - 1 do logFunction(basicFunctions.Objects[i] as TXQAbstractFunctionInfo);
+  for i := 0 to complexFunctions.Count - 1 do logFunction(complexFunctions.Objects[i] as TXQAbstractFunctionInfo);
+  for i := 0 to interpretedFunctions.Count - 1 do logFunction(interpretedFunctions.Objects[i] as TXQAbstractFunctionInfo);
+
+  for i := 0 to high(parents) do parents[i].dumpFunctions;
 end;
 {$endif}
 
 {$ifdef dumpFunctions}
 procedure TXSSchema.logConstructorFunctions;
 var
-  i, j: Integer;
+  i, j: SizeInt;
   t: TXSType;
   sversion: string;
   ok: Boolean;
@@ -9729,8 +9851,8 @@ end;
 
 class function TXQNativeModule.findFunction(const sl: TStringList; const name: string; argCount: integer): TXQAbstractFunctionInfo;
 var
-  i: Integer;
-  idx: Integer;
+  i: SizeInt;
+  idx: SizeInt;
   info: TXQAbstractFunctionInfo;
 begin
   idx := sl.IndexOf(name);

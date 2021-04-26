@@ -36,6 +36,7 @@ type
     class function compare(a, b: integer): TXQCompareResult; static;
     class function compare(a, b: boolean): TXQCompareResult; static;
     class function compare(a, b: string): TXQCompareResult; static;
+    class function compare(a, b: TBytes): TXQCompareResult; static;
     function inverted(): TXQCompareResult;
   end;
 
@@ -58,6 +59,7 @@ type
     class function equal(const key1, key2: string): boolean; static;
   end;
   TXQVoid = record end;
+  TXQHashMapCellArray = array of int32;
   {** Hashmap based on Bero's FLRECacheHashMap
 
       TXQHashmapStrOwning, e.g. TXQHashmapStrStr
@@ -83,13 +85,14 @@ type
     //if a cell with key = Key exists, return that cell; otherwise return empty cell at expected position
     function findCell(const Key: TKey): UInt32; inline;
     function findCellWithHash(const Key: TKey; hashcode: TXQHashCode): UInt32;
+    function findEmptyCell(const Key: TKey): UInt32; inline;
     procedure grow;
   protected
   {$if FPC_FULLVERSION <= 30004} public{$endif}
     LogSize: int32;
     Size: int32;
     Entities:array of THashMapEntity;
-    CellToEntityIndex: array of int32;
+    CellToEntityIndex: TXQHashMapCellArray;
     function getBaseValueOrDefault(const Key:TKey):TBaseValue;
     procedure setBaseValue(const Key:TKey;const Value:TBaseValue);
     function include(const Key:TKey; const Value:TBaseValue; allowOverride: boolean=true):PHashMapEntity;
@@ -146,6 +149,10 @@ type
     function get(const Key: TKey; const def: TValue): TValue; inline;
     function getOrDefault(const Key: TKey): TValue; inline;
     function getEnumerator: TKeyPairEnumerator;
+  end;
+
+  generic TXQBaseHashmapValuePointerLike<TKey, TValue, TKeyInfo> = object(specialize TXQBaseHashmapValuePointerLikeReadOnly<TKey, TValue, TKeyInfo>)
+    procedure include(const Key: TKey; const aValue: TValue; allowOverride: boolean=true);
   end;
 
   generic TXQBaseHashmapValuePointerLikeOwning<TKey, TValue, TKeyInfo, TValueOwnershipTracker> = object(specialize TXQBaseHashmapValuePointerLikeReadOnly<TKey, TValue, TKeyInfo>)
@@ -246,31 +253,31 @@ end;
 generic TFastInterfaceList<IT> = class
   type PIT = ^IT;
 protected
-  fcount, fcapacity: integer; // count
+  fcount, fcapacity: SizeInt; // count
   fbuffer: PIT; // Backend storage
-  procedure raiseInvalidIndexError(i: integer);  //**< Raise an exception
-  procedure checkIndex(i: integer); inline; //**< Range check
-  procedure reserve(cap: integer); //**< Allocates new memory if necessary
+  procedure raiseInvalidIndexError(i: SizeInt);  //**< Raise an exception
+  procedure checkIndex(i: SizeInt); inline; //**< Range check
+  procedure reserve(cap: SizeInt); //**< Allocates new memory if necessary
   procedure compress; //**< Deallocates memory by shorting list if necessary
-  procedure setCount(c: integer); //**< Forces a count (elements are initialized with )
-  procedure setCapacity(AValue: integer);
-  procedure setBufferSize(c: integer);
-  procedure insert(i: integer; child: IT);
-  procedure put(i: integer; const AValue: IT); inline; //**< Replace the IT at position i
+  procedure setCount(c: SizeInt); //**< Forces a count (elements are initialized with )
+  procedure setCapacity(AValue: SizeInt);
+  procedure setBufferSize(c: SizeInt);
+  procedure insert(i: SizeInt; child: IT);
+  procedure put(i: SizeInt; const AValue: IT); inline; //**< Replace the IT at position i
 public
-  constructor create(capacity: integer = 0);
+  constructor create(capacity: SizeInt = 0);
   destructor Destroy; override;
-  procedure delete(i: integer); //**< Deletes a value (since it is an interface, the value is freed iff there are no other references to it remaining)
+  procedure delete(i: SizeInt); //**< Deletes a value (since it is an interface, the value is freed iff there are no other references to it remaining)
   procedure remove(const value: IT);
   procedure add(const value: IT);
   procedure addAll(other: TFastInterfaceList);
-  function get(i: integer): IT; inline; //**< Gets an interface from the list.
+  function get(i: SizeInt): IT; inline; //**< Gets an interface from the list.
   function last: IT; //**< Last interface in the list.
   function first: IT; //**< First interface in the list.
   procedure clear;
-  property items[i: integer]: IT read get write put; default;
-  property Count: integer read fcount write setCount;
-  property Capacity: integer read fcapacity write setCapacity;
+  property items[i: SizeInt]: IT read get write put; default;
+  property Count: SizeInt read fcount write setCount;
+  property Capacity: SizeInt read fcapacity write setCapacity;
 end;
 
 TXMLDeclarationStandalone = (xdsOmit, xdsYes, xdsNo);
@@ -333,10 +340,12 @@ function urlHexDecode(s: string): string;
 
 
 function nodeNameHash(const s: RawByteString): cardinal;
-function nodeNameHashCheckASCII(const s: RawByteString): cardinal;
 function nodeNameHash(p: pchar; len: sizeint): cardinal; inline;
 
-function calcCellCandidate(logsize: int32; hashcode: TXQHashCode; out mask, step: uint32): uint32; inline;
+type THashMapHelper = record
+  class function calcCellCandidate(logsize: int32; hashcode: TXQHashCode; out mask, step: uint32): uint32; inline; static;
+  class function findEmptyCellWithHash(const cells: TXQHashMapCellArray; logsize: int32; hashcode: TXQHashCode): UInt32; static;
+end;
 
 
 type  TRaiseXQEvaluationExceptionCallback = procedure (const code, message: string);
@@ -362,6 +371,8 @@ const
 
 implementation
 uses math;
+
+
 
 class function TXQCompareResultHelper.fromIntegerResult(i: integer): TXQCompareResult;
 begin
@@ -394,6 +405,16 @@ end;
 class function TXQCompareResultHelper.compare(a, b: string): TXQCompareResult;
 begin
   result := fromIntegerResult(CompareStr(a,b));
+end;
+
+class function TXQCompareResultHelper.compare(a, b: TBytes): TXQCompareResult;
+begin
+  if pointer(a) = pointer(b) then exit(xqcrEqual);
+  if a = nil then exit(xqcrLessThan);
+  if b = nil then exit(xqcrGreaterThan);
+  result := fromIntegerResult(CompareMemRange(pointer(a), pointer(b), min(length(a), length(b))));
+  if (result = xqcrEqual) and (length(a) <> length(b)) then
+    result := compare(length(a), length(b));
 end;
 
 function TXQCompareResultHelper.inverted(): TXQCompareResult;
@@ -513,16 +534,35 @@ begin
 end;
 
 
-function TXQBaseHashmap.findCell(const key: TKey): UInt32;
+function TXQBaseHashmap.findCell(const Key: TKey): UInt32;
 begin
   result := findCellWithHash(key, TInfo.hash(key));
 end;
 
-function calcCellCandidate(logsize: int32; hashcode: TXQHashCode; out mask, step: uint32): uint32; inline;
+class function THashMapHelper.calcCellCandidate(logsize: int32; hashcode: TXQHashCode; out mask, step: uint32): uint32;
 begin
-  result:=HashCode shr (32-LogSize);
-  Mask:=(2 shl LogSize)-1;
-  Step:=((HashCode shl 1)+1) and Mask;
+ result:=HashCode shr (32-LogSize);
+ Mask:=(2 shl LogSize)-1;
+ Step:=((HashCode shl 1)+1) and Mask;
+end;
+
+class function THashMapHelper.findEmptyCellWithHash(const cells: TXQHashMapCellArray; logsize: int32; hashcode: TXQHashCode): UInt32;
+var Mask,Step:uint32;
+    Entity:int32;
+begin
+ if LogSize<>0 then begin
+   result := calcCellCandidate(LogSize, hashcode, mask, step);
+ end else begin
+  result:=0;
+  exit
+ end;
+ repeat
+  Entity:=cells[result];
+  if (Entity=ENT_EMPTY) then begin
+   exit;
+  end;
+  result:=(result+Step) and Mask;
+ until false;
 end;
 
 function TXQBaseHashmap.findCellWithHash(const Key: TKey; hashcode: TXQHashCode): UInt32;
@@ -530,7 +570,7 @@ var Mask,Step:uint32;
     Entity:int32;
 begin
  if LogSize<>0 then begin
-   result := calcCellCandidate(LogSize, hashcode, mask, step);
+   result := THashMapHelper.calcCellCandidate(LogSize, hashcode, mask, step);
  end else begin
   result:=0;
   exit
@@ -543,6 +583,12 @@ begin
   result:=(result+Step) and Mask;
  until false;
 end;
+
+function TXQBaseHashmap.findEmptyCell(const Key: TKey): UInt32;
+begin
+  result := THashMapHelper.findEmptyCellWithHash(CellToEntityIndex, LogSize, TInfo.hash(key));
+end;
+
 
 procedure TXQBaseHashmap.grow;
 var NewLogSize,NewSize,OldSize,Counter, Entity:int32;
@@ -572,7 +618,7 @@ begin
  for Counter:=0 to OldSize-1 do
   with Entities[counter] do begin
    {$ifdef HASHMAP_SUPPORTS_MARKING_DELETIONS}if not tinfo.isKeyDeleted(@Key) then begin{$endif}
-     Cell := FindCell(Key);
+     Cell := findEmptyCell(Key);
      CellToEntityIndex[Cell]:=Entity;
      {$ifdef HASHMAP_SUPPORTS_MARKING_DELETIONS}
      if Entity <> Counter then begin
@@ -893,7 +939,7 @@ var Mask,Step:uint32;
     Entity:int32;
 begin
  if LogSize<>0 then begin
-   result := calcCellCandidate(LogSize, hashcode, mask, step);
+   result := THashMapHelper.calcCellCandidate(LogSize, hashcode, mask, step);
  end else begin
   result:=0;
   exit
@@ -977,6 +1023,12 @@ end;
 
 //default maps
 
+procedure TXQBaseHashmapValuePointerLike.include(const Key: TKey; const aValue: TValue; allowOverride: boolean);
+begin
+  inherited include(key, pointer(avalue), allowOverride);
+end;
+
+
 {procedure TXQHashmapStr.SetValue(const Key: string; const AValue: TValue);
 begin
   SetBaseValue(key, pointer(avalue));
@@ -1011,6 +1063,7 @@ procedure TXQBaseHashmapValuePointerLikeOwning.SetValue(const Key: TKey; const A
 begin
   include(key, avalue, true);
 end;
+
 
 procedure TXQBaseHashmapValuePointerLikeOwning.clear;
 var
@@ -1177,7 +1230,8 @@ begin
   reserveadd(len);
   while inbuffer < inbufferend do begin
     case inbuffer^ of
-      '&': append('&amp;');
+      '&': if ((inbuffer + 1) >= inbufferend) or ((inbuffer + 1)^ <> '{') then append('&amp;')
+           else append('&'); //HTML4 Script Macro &{}
       '"': append('&quot;');
       '''': append('&apos;');
       else append(inbuffer^);
@@ -1392,8 +1446,8 @@ end;
 
 function urlHexDecode(s: string): string;
 var
-  p: Integer;
-  i: Integer;
+  p: SizeInt;
+  i: SizeInt;
 begin
   result := '';
   SetLength(result, length(s));
@@ -1452,13 +1506,6 @@ function nodeNameHash(const s: RawByteString): cardinal;
 begin
   result := TXQCaseInsensitiveTypeInfo.hash(pointer(s), length(s));
 end;
-function nodeNameHashCheckASCII(const s: RawByteString): cardinal;
-var
-  i: Integer;
-begin
-  for i := 1 to length(s) do if s[i] >= #128 then exit(0);
-  result := nodeNameHash(s);
-end;
 
 function nodeNameHash(p: pchar; len: sizeint): cardinal;
 begin
@@ -1508,32 +1555,32 @@ end;
 
 
 
-procedure TFastInterfaceList.setCapacity(AValue: integer);
+procedure TFastInterfaceList.setCapacity(AValue: SizeInt);
 begin
   if avalue > fcapacity then setBufferSize(AValue)
   else if avalue < fcount then setCount(AValue)
   else if avalue < fcapacity then setBufferSize(AValue);
 end;
 
-procedure TFastInterfaceList.raiseInvalidIndexError(i: integer);
+procedure TFastInterfaceList.raiseInvalidIndexError(i: SizeInt);
 begin
   raiseXQEvaluationException('pxp:INTERNAL', 'Invalid index: '+IntToStr(i));
 end;
 
-procedure TFastInterfaceList.checkIndex(i: integer);
+procedure TFastInterfaceList.checkIndex(i: SizeInt);
 begin
   if (i < 0) or (i >= fcount) then raiseInvalidIndexError(i);
 end;
 
 
-procedure TFastInterfaceList.put(i: integer; const AValue: IT); inline;
+procedure TFastInterfaceList.put(i: SizeInt; const AValue: IT); inline;
 begin
   assert(AValue <> nil);
   checkIndex(i);
   fbuffer[i] := AValue;
 end;
 
-procedure TFastInterfaceList.delete(i: integer);
+procedure TFastInterfaceList.delete(i: SizeInt);
 begin
   checkIndex(i);
   fbuffer[i] := nil;
@@ -1547,7 +1594,7 @@ end;
 
 procedure TFastInterfaceList.remove(const value: IT);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := fcount - 1 downto 0 do
     if fbuffer[i] = value then
@@ -1566,14 +1613,14 @@ end;
 
 procedure TFastInterfaceList.addAll(other: TFastInterfaceList);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   reserve(fcount + other.Count);
   for i := 0 to other.Count - 1 do
     add(other.fbuffer[i]);
 end;
 
-function TFastInterfaceList.get(i: integer): IT;
+function TFastInterfaceList.get(i: SizeInt): IT;
 begin
   checkIndex(i);
   result := fbuffer[i];
@@ -1596,9 +1643,9 @@ end;
 
 {$ImplicitExceptions off}
 
-procedure TFastInterfaceList.setBufferSize(c: integer);
+procedure TFastInterfaceList.setBufferSize(c: SizeInt);
 var
-  oldcap: Integer;
+  oldcap: SizeInt;
 begin
   oldcap := fcapacity;
   ReAllocMem(fbuffer, c * sizeof(IT));
@@ -1607,9 +1654,9 @@ begin
     FillChar(fbuffer[oldcap], sizeof(IT) * (fcapacity - oldcap), 0);
 end;
 
-procedure TFastInterfaceList.reserve(cap: integer);
+procedure TFastInterfaceList.reserve(cap: SizeInt);
 var
-  newcap: Integer;
+  newcap: SizeInt;
 begin
   if cap <= fcapacity then exit;
 
@@ -1628,9 +1675,9 @@ begin
   else if fcount <= fcapacity - 1024 then setBufferSize(fcapacity - 1024);
 end;
 
-procedure TFastInterfaceList.setCount(c: integer);
+procedure TFastInterfaceList.setCount(c: SizeInt);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   reserve(c);
   if c < fcount then begin
@@ -1648,7 +1695,7 @@ end;
 
 procedure TFastInterfaceList.clear;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to fcount - 1 do begin
     assert(fbuffer[i] <> nil);
@@ -1664,7 +1711,7 @@ begin
   inherited Destroy;
 end;
 
-procedure TFastInterfaceList.insert(i: integer; child: IT);
+procedure TFastInterfaceList.insert(i: SizeInt; child: IT);
 begin
   assert(child <> nil);
   reserve(fcount + 1);
@@ -1677,7 +1724,7 @@ begin
   fcount+=1;
 end;
 
-constructor TFastInterfaceList.create(capacity: integer);
+constructor TFastInterfaceList.create(capacity: SizeInt);
 begin
   reserve(capacity);
   fcount := 0;

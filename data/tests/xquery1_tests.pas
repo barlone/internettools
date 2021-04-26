@@ -194,6 +194,7 @@ begin
 
   count:=0;
   ps := TXQueryEngine.Create;
+  ps.StaticContext.model := xqpmXQuery1;
   ps.StaticContext.baseURI := 'pseudo://test';
   ps.ImplicitTimezoneInMinutes:=-5 * 60;
   ps.OnCollection := TXQEvaluateVariableEvent(procedureToMethod(TProcedure(@collection)));
@@ -1314,7 +1315,7 @@ begin
   t('<r><a><b>b1<c>c1</c><c>c2</c><c>c3</c><c>c4</c></b><b>b2<c>cx1</c><c>cx2<c>CC1</c></c></b>al<d>d1</d><d>d2</d><d>d3<e>dxe1</e></d><f>f1</f><f>f2</f></a></r> / string-join((a/b) / (c/c), ",")', 'CC1', '');
   t('<r><a><b>b1<c>c1</c><c>c2</c><c>c3</c><c>c4</c></b><b>b2<c>cx1</c><c>cx2<c>CC1</c></c></b>al<d>d1</d><d>d2</d><d>d3<e>dxe1</e></d><f>f1</f><f>f2</f></a></r> / string-join(a/b[2]/c[1]/c[1], ",")', '', '');
   t('<r><a><b>b1<c>c1</c><c>c2</c><c>c3</c><c>c4</c></b><b>b2<c>cx1</c><c>cx2<c>CC1</c></c></b>al<d>d1</d><d>d2</d><d>d3<e>dxe1</e></d><f>f1</f><f>f2</f></a></r> / string-join(a/b[2]/c[2]/c[1], ",")', 'CC1', '');
-                //concattenate,union,intersect,except
+                //concatenate,union,intersect,except
   t('<r><a><b>b1<c>c1</c><c>c2</c><c>c3</c><c>c4</c></b><b>b2<c>cx1</c><c>cx2<c>CC1</c></c></b>al<d>d1</d><d>d2</d><d>d3<e>dxe1</e></d><f>f1</f><f>f2</f></a></r> / string-join((a/b, a/f), ",")', 'b1c1c2c3c4,b2cx1cx2CC1,f1,f2', '');
   t('<r><a><b>b1<c>c1</c><c>c2</c><c>c3</c><c>c4</c></b><b>b2<c>cx1</c><c>cx2<c>CC1</c></c></b>al<d>d1</d><d>d2</d><d>d3<e>dxe1</e></d><f>f1</f><f>f2</f></a></r> / string-join((a/f, a/b), ",")', 'f1,f2,b1c1c2c3c4,b2cx1cx2CC1', '');
   t('<r><a><b>b1<c>c1</c><c>c2</c><c>c3</c><c>c4</c></b><b>b2<c>cx1</c><c>cx2<c>CC1</c></c></b>al<d>d1</d><d>d2</d><d>d3<e>dxe1</e></d><f>f1</f><f>f2</f></a></r> / string-join((a/f, a/b, a/f), ",")', 'f1,f2,b1c1c2c3c4,b2cx1cx2CC1,f1,f2', '');
@@ -1438,7 +1439,7 @@ begin
   t('<a><b><c/></b><x/><y/></a> //c/ (for $i in 1 to 3 return (name((ancestor::*)[$i])))', 'a b ');
 
   t('outer-xml(<a xml:id="foobar"/>)', '<a xml:id="foobar"/>');
-  t('outer-xml(<a>{attribute {QName("'+XMLNamespaceUrl_XML+'", "id")} {123}}</a>)', '<a xml:id="123"/>');
+  t('outer-xml(<a>{attribute {QName("'+XMLNamespaceUrl_XML+'", "id")} {"x123"}}</a>)', '<a xml:id="x123"/>');
 
   m('declare base-uri "http://example.org"; base-uri(document { element a {1} })', 'http://example.org');
   m('declare base-uri "http://example.org"; base-uri(element a {1} )', 'http://example.org');
@@ -1611,8 +1612,8 @@ begin
   m('outer-xml(<a>&#x9;&#xA;&#xD;&#x85;&#x2028;</a>)', '<a>'#9#10'&#xD;&#x85;&#x2028;</a>');
   m('outer-xml(<a x="foobar&#x9;&#xA;&#xD;&#x85;&#x2028;"/>)', '<a x="foobar&#x9;&#xA;&#xD;&#x85;&#x2028;"/>');
 
-  t('outer-xml(<a id="  a  b "/>)', '<a id="  a  b "/>');
-  t('outer-xml(<a xml:id="  a  b "/>)', '<a xml:id="a b"/>');
+  t('outer-xml(<a id="  axxb "/>)', '<a id="  axxb "/>');
+  t('outer-xml(<a xml:id="  axxb "/>)', '<a xml:id="axxb"/>');
   t('(text {""}, text {""}, text {""}, comment {()}) /(position())', '1 2 3 4');
   m('declare namespace test = "foobar"; <a xmlns:test="foobar" test:test="123"/> / @test:test', '123');
   m('declare namespace test = "foobar"; <a xmlns:test="foobar" test:test="123"/> / namespace-uri(@test:test)', 'foobar');
@@ -1679,7 +1680,7 @@ begin
   m('number("17")', '17');
   m('number(text {"17"} )', '17');
   m('number(comment {"17"} )', '17');
-  m('string-to-codepoints("ABC")', '65');
+  m('string-to-codepoints("ABC")', '656667');
   m('string-to-codepoints(processing-instruction XYZ {"A"})', '65');
   t('collection()', 'foobar');
   m('123 castable as xs:integer', 'true');

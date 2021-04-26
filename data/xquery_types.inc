@@ -32,7 +32,7 @@ begin
   Result:=TXQVList.Create;
 end;
 
-function TXQValueUndefined.getSequenceCount: integer;
+function TXQValueUndefined.getSequenceCount: SizeInt;
 begin
   Result := 0 ;
 end;
@@ -160,6 +160,11 @@ begin
   result[0] := self;
 end;
 
+function TXQValue.toBinaryBytes: TBytes;
+begin
+  raiseXPTY0004TypeError(self, 'binary');
+end;
+
 {$ImplicitExceptions off}
 constructor TXQValue.create(atypeAnnotation: TXSType);
 begin
@@ -282,7 +287,7 @@ end;
 
 function TXQValue.setImmutable(const name, value: IXQValue): TXQValueMapLike;
 begin
-  result := setImmutable(name.toString, value); //todo setting non-string key should work on string maps (e.g. map:put on empty map)
+  result := setImmutable(name.toString, value);
 end;
 
 function TXQValue.setImmutable(const name: string; const v: IXQValue): TXQValueMapLike;
@@ -393,12 +398,12 @@ begin
   result := self;
 end;
 
-function TXQValue.getSequenceCount: integer;
+function TXQValue.getSequenceCount: SizeInt;
 begin
   result := 1;
 end;
 
-function TXQValue.get(i: integer): IXQValue;
+function TXQValue.get(i: SizeInt): IXQValue;
 begin
   if i = 1 then exit(self);
   exit(xqvalue);
@@ -488,7 +493,7 @@ end;
 
 function TXQValue.debugAsStringWithTypeAnnotation(textOnly: boolean = true): string;
 var
-  i: Integer;
+  i: SizeInt;
   prop: TXQStandardProperty;
   first: Boolean;
 begin
@@ -824,18 +829,14 @@ var tempContext: TXQEvaluationContext;
     l: SizeInt;
   begin
     f := guessFormat(data, uri, contenttype);
-    if (f = itfJSON) then begin
-      exit(defaultQueryEngine.DefaultJSONParser.parse(data));
+    case f of
+      itfJSON:
+        exit(defaultQueryEngine.DefaultJSONParser.parse(data));
+      itfUnknown, itfPlainText:
+        exit(TXQValueString.create(baseSchema.untypedAtomic, data));
+      itfXML, itfHTML, itfXMLPreparsedEntity:
+        result := xqvalue(tempContext.parseDoc(data, uri, contenttype));
     end;
-    if f = itfXML then begin
-      if data = '' then exit(TXQValueString.create(baseSchema.untypedAtomic, ''));
-      //default
-      p := @data[1];
-      l := length(data);
-      strlTrimLeft(p, l);
-      if (l = 0) or (p^ <> '<') then exit(TXQValueString.create(baseSchema.untypedAtomic, data));
-    end;
-    result := xqvalue(tempContext.parseDoc(data, uri, contenttype));
   end;
 
   procedure handle(const v: IXQValue);
@@ -865,7 +866,7 @@ var tempContext: TXQEvaluationContext;
   end;
 
 var v: IXQValue;
-    i: Integer;
+    i: SizeInt;
 begin
   tempContext := defaultQueryEngine.getEvaluationContext();
   resseq := TXQValueSequence.create();
@@ -1494,21 +1495,40 @@ begin
   Result:=TXQDefaultTypeInfo.hash(pchar(encoded), length(encoded));
 end;
 
-function TXQValueBinary.toRawBinary: string;
+function base64ToBytes(const s:string):TBytes;
+
+var
+  ss: tstringstream;
+  decoder: TBase64DecodingStream = nil;
 begin
-  if instanceOf(baseSchema.hexBinary) then result := encoded.decodeHex
-  else if instanceOf(baseSchema.base64Binary) then begin
-    if encoded = '' then exit('');
-    result := base64.DecodeStringBase64(encoded)
-  end else begin assert(false); result := ''; end;
+  result := nil;
+  if Length(s) = 0 then exit;
+  ss := TStringStream.Create(s);
+  try
+    decoder := TBase64DecodingStream.Create(ss, bdmStrict);
+    setlength(Result, decoder.size);
+    decoder.Read(result[0], decoder.Size);
+  finally
+    decoder.free;
+    ss.Free;
+  end;
 end;
 
+
+function TXQValueBinary.toBinaryBytes: TBytes;
+begin
+  if instanceOf(baseSchema.hexBinary) then result := encoded.DecodeHexToBytes
+  else if instanceOf(baseSchema.base64Binary) then result := base64ToBytes(encoded)
+  else begin assert(false); result := nil; end;
+end;
+
+
 class function TXQValueBinary.compare(a, b: TXQValue): TXQCompareResult;
-var sa, sb, temp: string;
+var binaries: array[0..1] of tbytes = (nil, nil);
+    temp: string;
+    untypedIndex: integer;
     at, bt: (tBase64, tHex, tUntyped, tOther);
 begin
-  sa := '';
-  sb := '';
   if a.typeAnnotation <> b.typeAnnotation then begin
     if a.instanceOf(baseSchema.base64Binary) then at := tBase64
     else if a.instanceOf(baseSchema.hexBinary) then at := tHex
@@ -1521,30 +1541,38 @@ begin
 
     result := xqcrEqual;
     if (at = tUntyped) or (bt = tUntyped) then begin
+      //this branch is only taken if strict-type-checking is disabled and it is compared using eq/ne/..  ?? todo:can this be simplified
       try
-        if at = tUntyped then temp := a.toString
-        else temp := b.toString;
-        if (at = tBase64) or (bt = tBase64) then temp := base64.DecodeStringBase64(temp)
+        if at = tUntyped then begin
+          untypedIndex := 0;
+          temp := a.toString;
+          binaries[1] := b.toBinaryBytes;
+        end else begin
+          untypedIndex := 1;
+          binaries[0] := a.toBinaryBytes;
+          temp := b.toString
+        end;
+        if (at = tBase64) or (bt = tBase64) then binaries[untypedIndex] := base64ToBytes(temp)
         else begin
           if length(temp) and 1 = 1 then exit(xqcrIncomparable);
-          temp := temp.DecodeHex;
+          binaries[untypedIndex] := temp.DecodeHexToBytes;
         end;
-        if at = tUntyped then sa := temp
-        else sb := temp;
       except
         on e: Exception do  {StreamError for base64, exception for hex}
           exit(xqcrIncomparable);
       end;
     end else if ((at = tHex) and (bt = tHex)) or ((at = tBase64) and (bt = tBase64)) then begin
-     //okay
+      binaries[0] := a.toBinaryBytes;
+      binaries[1] := b.toBinaryBytes;
     end else begin
       //if strictTypeChecking then raiseXPTY0004TypeError(a, 'binary like ' + b.toXQuery);
       exit(xqcrIncomparable);
     end;
+  end else begin
+    binaries[0] := a.toBinaryBytes;
+    binaries[1] := b.toBinaryBytes;
   end;
-  if sa = '' then sa := (a as TXQValueBinary).toRawBinary;
-  if sb = '' then sb := (b as TXQValueBinary).toRawBinary;
-  result := TXQCompareResult.compare(sa, sb);
+  result := TXQCompareResult.compare(binaries[0], binaries[1]);
   //todo: less-than/greater-than should raise exception unless 3.1 mode is enabled
 end;
 function TXQValueBinary.clone: IXQValue;
@@ -2026,7 +2054,7 @@ end;
 
 {$ImplicitExceptions off}
 
-constructor TXQValueSequence.create(capacity: integer);
+constructor TXQValueSequence.create(capacity: SizeInt);
 begin
   inherited create(baseSchema.sequence);
   seq := TXQVList.Create(capacity);
@@ -2071,7 +2099,7 @@ begin
     else
       case seq[0].kind of
         pvkNode, pvkObject, pvkArray: exit(true);
-        else raise EXQEvaluationException.Create('FORG0006', 'A sequence starting with an atomic value cannot be used as boolean');
+        else raise EXQEvaluationException.Create('FORG0006', 'A sequence starting with an atomic value cannot be used as boolean', nil, self);
       end;
 
   end;
@@ -2098,13 +2126,12 @@ end;
 {$ImplicitExceptions off}
 function TXQValueSequence.toString: string;
 begin
-  if seq.Count >= 1 then result := seq[0].toString
-  else result := '';
+  result := toJoinedString('')
 end;
 {$ImplicitExceptions on}
 
 function TXQValueSequence.toJoinedString(const sep: string): string;
-var i: integer;
+var i: SizeInt;
     builder: TStrBuilder;
 begin
   if seq.count = 0 then exit('');
@@ -2157,20 +2184,20 @@ end;
 
 function TXQValueSequence.toXQVList: TXQVList;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result := TXQVList.Create;
   for i:=0 to seq.Count-1 do
     result.add(seq[i]);
 end;
 
-function TXQValueSequence.getSequenceCount: integer;
+function TXQValueSequence.getSequenceCount: SizeInt;
 begin
   Result:=seq.Count;
 end;
 
 
-function TXQValueSequence.get(i: integer): IXQValue;
+function TXQValueSequence.get(i: SizeInt): IXQValue;
 begin
   if (i < 1) or (i > seq.Count) then exit(xqvalue);
   exit(seq[i-1]);
@@ -2191,7 +2218,7 @@ function TXQValueSequence.map(const q: string): IXQValue;
 var
   term: TXQuery;
   resseq: TXQValueSequence;
-  i: Integer;
+  i: SizeInt;
 begin
   term := defaultQueryEngine.parseTerm(q, xqpmXQuery3_1, defaultQueryEngine.StaticContext);
   try
@@ -2212,7 +2239,7 @@ end;
 
 function TXQValueSequence.clone: IXQValue;
 var
-  i: Integer;
+  i: SizeInt;
   seqr: TXQValueSequence;
 begin
   seqr := TXQValueSequence.Create(seq.Count);
@@ -2223,7 +2250,7 @@ end;
 
 procedure TXQValueSequence.jsonSerialize(var serializer: TXQSerializer);
 var
-  i: Integer;
+  i: SizeInt;
   ws: TXQSerializerInsertWhitespace;
 begin
   case seq.Count of
@@ -2256,7 +2283,7 @@ end;
 
 procedure TXQValueSequence.xmlSerialize(var serializer: TXQSerializer);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   with serializer do
     if seq.Count = 0 then
@@ -2277,7 +2304,7 @@ end;
 
 procedure TXQValueSequence.adaptiveSerialize(var serializer: TXQSerializer);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   case getSequenceCount of
     0: serializer.append('()');
@@ -2507,7 +2534,6 @@ begin
 end;
 
 
-
 class function TXQValueMapLike.classKind: TXQValueKind;
 begin
   Result:=pvkObject;
@@ -2516,20 +2542,21 @@ end;
 function TXQValueMapLike.toBooleanEffective: boolean;
 begin
   Result:=true;
-  //xpath 3.1:
-  //todo
-  raise EXQEvaluationException.create('FORG0006', 'Object cannot be used as boolean', nil, self);
+  if not globalCurrentQueryInfo.AllowJSONiqOperations then
+    raise EXQEvaluationException.create('FORG0006', 'Object cannot be used as boolean', nil, self);
 end;
 
 function TXQValueMapLike.toString: string;
 begin
   Result:=inherited toString;
-  raise EXQEvaluationException.create('FOTY0014', 'Object cannot be used as string', nil, self);
+  if not globalCurrentQueryInfo.AllowJSONiqOperations then
+    raise EXQEvaluationException.create('FOTY0014', 'Object cannot be used as string', nil, self);
 end;
 
 function TXQValueMapLike.toJoinedString(const sep: string): string;
 begin
-  raise EXQEvaluationException.create('FOTY0013', 'Object cannot be used as string', nil, self); //0013 because it is implicitly calling fn:data
+  if not globalCurrentQueryInfo.AllowJSONiqOperations then
+    raise EXQEvaluationException.create('FOTY0013', 'Object cannot be used as string', nil, self); //0013 because it is implicitly calling fn:data
   Result:=inherited toJoinedString(sep);
 end;
 
@@ -2607,12 +2634,17 @@ end;
 
 function TXQValueStringMap.hasProperty(const name: ixqvalue; value: PXQValue): boolean;
 begin
-  Result:=hasProperty(name.toString, value);
+  if TXQValueOwnershipTracker.isStringLikeAfterAtomize(name.toValue) or globalCurrentQueryInfo.CastStringMapKeysToString then
+    Result := hasProperty(name.toString, value)
+   else
+    result := false;
 end;
 
 function TXQValueStringMap.getProperty(const name: IXQValue): IXQValue;
+var temp: TXQValue;
 begin
-  Result:=getProperty(name.toString);
+  if hasProperty(name, @temp) then result := temp
+  else result := xqvalue();
 end;
 
 function TXQValueStringMap.getProperty(const name: string): IXQValue;
@@ -2702,10 +2734,25 @@ begin
   end;
 end;
 
+function TXQValueStringMap.setImmutable(const name, value: IXQValue): TXQValueMapLike;
+var
+  sp: TXQStandardProperty;
+  res: TXQValueStandardMap;
+begin
+  if (name.typeAnnotation = baseSchema.string_) or globalCurrentQueryInfo.CastStringMapKeysToString then
+    exit(setImmutable(name.toString, value));
+  res := TXQValueStandardMap.create();
+  result := res;
+  for sp in getEnumeratorPropertiesUnsafe do
+    res.mapdata.include(sp.key, sp.value);
+  res.setMutable(name, value);
+end;
+
 procedure TXQValueStringMap.setMutable(const name: string; const s: string);
 begin
   setMutable(name, xqvalue(s));
 end;
+
 
 
 procedure TXQValueStringMap.enumeratePropertyKeys(var keyset: TXQHashsetStr);
@@ -3151,7 +3198,7 @@ begin
   seq := takeList
 end;
 
-constructor TXQValueJSONArray.create(capacity: integer);
+constructor TXQValueJSONArray.create(capacity: SizeInt);
 begin
   inherited create(baseJSONiqSchema.array_);
   seq := TXQVList.create(capacity);
@@ -3190,7 +3237,8 @@ end;
 function TXQValueJSONArray.toBooleanEffective: boolean;
 begin
   result := true;
-  raise EXQEvaluationException.create('FORG0006', 'Array cannot be used as boolean', nil, self);
+  if not globalCurrentQueryInfo.AllowJSONiqOperations then
+    raise EXQEvaluationException.create('FORG0006', 'Array cannot be used as boolean', nil, self);
 end;
 
 function TXQValueJSONArray.toString: string;
@@ -3218,7 +3266,7 @@ end;
 
 function TXQValueJSONArray.clone: IXQValue;
 var
-  i: Integer;
+  i: SizeInt;
   seqr: TXQValueJSONArray;
 begin
   seqr := TXQValueJSONArray.Create(seq.Count);
@@ -3230,12 +3278,12 @@ end;
 function TXQValueJSONArray.setImmutable(const props: PString; len: SizeInt; const v: IXQValue): TXQValue;
 var
   newValue: IXQValue;
-  i: Integer;
-  idx: Integer;
+  i: SizeInt;
+  idx: SizeInt;
   resultArray: TXQValueJSONArray;
   resseq: TXQVList;
 begin
-  idx := StrToInt(props^);
+  idx := StrToInt64(props^);
   if idx < 0 then raise EXQEvaluationException.create('pxp:ARRAY', 'Cannot assign to negative array index');
 
   if (len = 1) then
@@ -3259,7 +3307,7 @@ end;
 
 procedure TXQValueJSONArray.jsonSerialize(var serializer: TXQSerializer);
 var
-  i: Integer;
+  i: SizeInt;
   ws: TXQSerializerInsertWhitespace;
 begin
   case seq.Count of
@@ -3290,7 +3338,7 @@ end;
 
 procedure TXQValueJSONArray.xmlSerialize(var serializer: TXQSerializer);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   with serializer do
     if seq.Count = 0 then
@@ -3311,7 +3359,7 @@ end;
 
 procedure TXQValueJSONArray.adaptiveSerialize(var serializer: TXQSerializer);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   serializer.appendJSONArrayStart;
   if seq.Count > 0 then begin
@@ -3397,7 +3445,7 @@ end;
 
 destructor TXQValueFunction.Destroy;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   if ownsTerms then begin
     body.free;
@@ -3426,7 +3474,7 @@ end;
 function TXQValueFunction.evaluate(const outerContext: TXQEvaluationContext; const term: TXQTerm): IXQValue;
 var
   tempcontext: TXQEvaluationContext;
-  j: Integer;
+  j: SizeInt;
   evilkids: PIXQValue;
 begin
   tempcontext := context;
@@ -3443,7 +3491,7 @@ end;
 
 function TXQValueFunction.evaluateInContext(var inContext: TXQEvaluationContext; const term: TXQTerm): IXQValue;
 var
-  j: Integer;
+  j: SizeInt;
   evilkids: PIXQValue;
 begin
   if length(parameters) > 0 then begin
@@ -3455,11 +3503,11 @@ begin
   TXQAbstractFunctionInfo.convertType(result, resulttype, inContext, term);
 end;
 
-procedure TXQValueFunction.contextOverrideParameterNames(const inContext: TXQEvaluationContext; count: integer);
+procedure TXQValueFunction.contextOverrideParameterNames(const inContext: TXQEvaluationContext; count: SizeInt);
 {$IFDEF TRACK_STACK_VARIABLE_NAMES}
 var
   stack: TXQEvaluationStack;
-  i: Integer;
+  i: SizeInt;
 {$endif}
 begin
   if count <> length(parameters) then
@@ -3497,7 +3545,7 @@ end;
 
 function TXQValueFunction.toXQuery: string;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   result := 'function (';
   for i := 0 to high(parameters) do begin
@@ -3511,7 +3559,7 @@ end;
 
 function TXQValueFunction.debugAsStringWithTypeAnnotation(textOnly: boolean): string;
 var
-  i: Integer;
+  i: SizeInt;
 begin
   ignore(textOnly);
   result := 'function (';
@@ -3526,7 +3574,7 @@ end;
 
 procedure TXQValueFunction.assignCopiedTerms(const func: TXQValueFunction);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   body := func.body.clone;
   SetLength(parameters, length(func.parameters));
@@ -3564,7 +3612,7 @@ end;
 
 procedure TXQValueFunction.visit(visitor: TXQTerm_Visitor);
 var
-  i: Integer;
+  i: SizeInt;
 begin
   for i := 0 to high(parameters) do
     visitor.declare(@parameters[i].variable, nil);

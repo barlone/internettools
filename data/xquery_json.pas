@@ -78,7 +78,7 @@ var resobj: TXQValueStringMap;
     end;
 
 var v: IXQValue;
-  i: Integer;
+  i: SizeInt;
 begin
   resobj := TXQValueStringMap.create();
   try
@@ -131,6 +131,9 @@ var
   parser: TXQJsonParser;
   s, contenttype, data: String;
 begin
+  if assigned(context.staticContext.sender.OnWarningDeprecated) then
+    context.staticContext.sender.OnWarningDeprecated(context.staticContext.sender, 'json is deprecated. Use json-doc or parse-json functions.');
+
   parser.init;
   parser.options := context.staticContext.sender.DefaultJSONParser.options;
   if argc = 2 then parser.setConfigFromMap(args[1]);
@@ -158,7 +161,7 @@ function xqFunctionMembers({%H-}argc: SizeInt; args: PIXQValue): IXQValue;
 var
   v: IXQValue;
   ara: TXQValueJSONArray;
-  i: Integer;
+  i: SizeInt;
   list: TXQVList;
 begin
   list := TXQVList.create();

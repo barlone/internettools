@@ -12,7 +12,7 @@ uses
   windows,
   {$endif}
   Classes, sysutils, strutils, xquery, xquery_module_math,
-  simplehtmltreeparser, simplexmltreeparserfpdom, XMLRead, xquery__regex, xquery_module_file,
+  simplehtmltreeparser, simplexmltreeparserfpdom, XMLRead, xquery__regex, xquery_module_file, xquery_module_binary,
   bbutils, math, rcmdline, internetaccess, mockinternetaccess, xquery.namespaces, xquery.internals.common, xquery.internals.collations,
   dynlibs, xquery_module_uca_icu;
   { you can add units after this }
@@ -247,7 +247,7 @@ var
   f: TTreeNode;
   v: IXQValue;
 begin
-  for v in xq.parseQuery('./*:*', xqpmXPath2).evaluate(e) do begin
+  for v in xq.parseQuery('./*', xqpmXPath2).evaluate(e) do begin
     f := v.toNode;
     case f.value of
       'all-of', 'any-of', 'not': begin
@@ -1067,7 +1067,7 @@ begin
 
   name := e['name'];
   coversName := e['covers'];
-  for v in xq.parseQuery('./*:*', xqpmXPath2).evaluate(e) do begin
+  for v in xq.parseQuery('./*', xqpmXPath2).evaluate(e) do begin
     f := v.toNode;
     case f.value of
       'description', 'created', 'modified': ;
@@ -1354,7 +1354,7 @@ begin
 
   name := e['name'];
   coversName := e['covers'];
-  for v in xq.parseQuery('./*:*', xqpmXPath2).evaluate(e) do begin
+  for v in xq.parseQuery('./*', xqpmXPath2).evaluate(e) do begin
     f := v.toNode;
     case f.value of
       'description': ;
@@ -1741,10 +1741,11 @@ begin
   cat.addRef;
   if cat.getFirstChild().getAttribute('test-suite') = 'EXPATH' then begin
     registerModuleFile;
+    registerModuleBinary;
     xq.ImplicitTimezoneInMinutes := -GetLocalTimeOffset;
   end;
   basePath := strBeforeLast(cat.documentURI,'/');
-  for v in xq.parseQuery('/*:catalog/*:*', xqpmXPath2).evaluate(cat) do begin
+  for v in xq.parseQuery('/*:catalog/*', xqpmXPath2).evaluate(cat) do begin
     e :=  v.toNode;
     case e.value of
       'environment': //environments.AddObject(e['name'], TEnvironment.load(e));
@@ -1986,6 +1987,7 @@ begin
   xq.StaticContext.stripBoundarySpace:=true;
   xq.StaticContext.strictTypeChecking:=true;
   xq.StaticContext.defaultFunctionNamespace := TNamespace.make(XMLNamespaceURL_XPathFunctions, 'fn');
+  xq.StaticContext.model := config.version;
   TNamespace.releaseIfNonNil(xq.StaticContext.defaultTypeNamespace);
   xq.StaticContext.useLocalNamespaces:=false;
   xq.AutomaticallyRegisterParsedModules := true;
